@@ -1,7 +1,6 @@
 #pragma once
 
-#define VK_NO_PROTOTYPES
-#include <vulkan/vulkan.h>
+#include "vk-wsi.hpp"
 
 #define VULKAN_INSTANCE_FUNCTIONS(DO) \
     DO(EnumeratePhysicalDevices) \

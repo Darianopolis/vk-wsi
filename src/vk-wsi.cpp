@@ -1,4 +1,4 @@
-#include "vk-wsi.hpp"
+#include "vk-wsi-impl.hpp"
 
 #include <print>
 
@@ -55,11 +55,12 @@ auto vkwsi_enumerate(Container& container, Fn&& fn, Args&&... args)
 static
 VkResult vkwsi_recover_binary_semaphores(vkwsi_context* ctx);
 
-VkResult vkwsi_context_init(vkwsi_context* ctx, const vkwsi_context_info& info)
+VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info& info)
 {
     VkResult res;
 
-    *ctx = {};
+    auto ctx = new vkwsi_context {};
+    // TODO: Cleanup on error
 
     if (!info.instance || !info.device || !info.physical_device) {
         return VK_ERROR_INITIALIZATION_FAILED;
@@ -89,6 +90,8 @@ VkResult vkwsi_context_init(vkwsi_context* ctx, const vkwsi_context_info& info)
     }), nullptr, &ctx->timeline);
     VKWSI_CHECK(res);
 
+    *pp_ctx = ctx;
+
     return VK_SUCCESS;
 }
 
@@ -107,6 +110,8 @@ void vkwsi_context_destroy(vkwsi_context* ctx)
     for (auto fence : ctx->fences) {
         ctx->DestroyFence(ctx->device, fence, ctx->alloc);
     }
+
+    delete ctx;
 }
 
 static
@@ -269,20 +274,24 @@ VkResult vkwsi_wait_all_present_complete(vkwsi_swapchain* swapchain)
 
 // -----------------------------------------------------------------------------
 
-VkResult vkwsi_swapchain_init(vkwsi_swapchain* swapchain, vkwsi_context* ctx, VkSurfaceKHR surface)
+VkResult vkwsi_swapchain_create(vkwsi_swapchain** pp_swapchain, vkwsi_context* ctx, VkSurfaceKHR surface)
 {
     VkResult res;
 
-    *swapchain = {};
+    auto swapchain = new vkwsi_swapchain {};
+
     swapchain->ctx = ctx;
     swapchain->surface = surface;
 
-    // res = ctx->CreateFence(ctx->device, vkwsi_temp(VkFenceCreateInfo {
-    //     .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-    // }), ctx->alloc, &swapchain->present_fence);
-    // VKWSI_CHECK(res);
+    *pp_swapchain = swapchain;
 
     return VK_SUCCESS;
+}
+
+void vkwsi_swapchain_set_info(vkwsi_swapchain* swapchain, vkwsi_swapchain_info info)
+{
+    swapchain->pending_info = std::move(info);
+    swapchain->out_of_date = true;
 }
 
 static
@@ -301,6 +310,8 @@ void vkwsi_swapchain_destroy(vkwsi_swapchain* swapchain)
 {
     vkwsi_wait_all_present_complete(swapchain);
     vkwsi_destroy_vk_swapchain(swapchain, swapchain->swapchain);
+
+    delete swapchain;
 }
 
 static
@@ -310,6 +321,8 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     VkResult res;
 
     vkwsi_wait_all_present_complete(swapchain);
+
+    auto info = swapchain->pending_info;
 
     auto desired_extent = swapchain->pending_extent;
 
@@ -327,7 +340,7 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         .height = std::clamp(desired_extent.height, surface_caps.minImageExtent.height, surface_caps.maxImageExtent.width),
     };
 
-    auto min_image_count = std::max(swapchain->info.min_image_count, surface_caps.minImageCount);
+    auto min_image_count = std::max(info.min_image_count, surface_caps.minImageCount);
     if (surface_caps.maxImageCount) min_image_count = std::min(min_image_count, surface_caps.maxImageCount);
 
     std::println("Recreating swapchain");
@@ -345,7 +358,7 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     } else {
         std::println("  caps_image_count = ({}..)", surface_caps.minImageCount);
     }
-        std::println("   min_image_count =  {}", swapchain->info.min_image_count);
+        std::println("   min_image_count =  {}", info.min_image_count);
         std::println(" final_image_count =  {}", min_image_count);
 
     auto old_swapchain = swapchain->swapchain;
@@ -353,18 +366,18 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         // .flags = VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR,
         .surface               = swapchain->surface,
-        .minImageCount         = swapchain->info.min_image_count,
-        .imageFormat           = swapchain->info.format,
-        .imageColorSpace       = swapchain->info.color_space,
+        .minImageCount         = info.min_image_count,
+        .imageFormat           = info.format,
+        .imageColorSpace       = info.color_space,
         .imageExtent           = extent,
-        .imageArrayLayers      = swapchain->info.image_array_layers,
-        .imageUsage            = swapchain->info.image_usage,
-        .imageSharingMode      = swapchain->info.image_sharing_mode,
-        .queueFamilyIndexCount = uint32_t(swapchain->info.queue_families.size()),
-        .pQueueFamilyIndices   = swapchain->info.queue_families.data(),
-        .preTransform          = swapchain->info.pre_transform,
-        .compositeAlpha        = swapchain->info.composite_alpha,
-        .presentMode           = swapchain->info.present_mode,
+        .imageArrayLayers      = info.image_array_layers,
+        .imageUsage            = info.image_usage,
+        .imageSharingMode      = info.image_sharing_mode,
+        .queueFamilyIndexCount = uint32_t(info.queue_families.size()),
+        .pQueueFamilyIndices   = info.queue_families.data(),
+        .preTransform          = info.pre_transform,
+        .compositeAlpha        = info.composite_alpha,
+        .presentMode           = info.present_mode,
         .oldSwapchain          = old_swapchain,
     }), ctx->alloc, &swapchain->swapchain);
     VKWSI_CHECK(res);
@@ -387,6 +400,7 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
 
     swapchain->last_extent = extent;
     swapchain->out_of_date = false;
+    swapchain->info = info;
 
     return VK_SUCCESS;
 }

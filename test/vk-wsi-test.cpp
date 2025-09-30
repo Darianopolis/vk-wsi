@@ -336,6 +336,17 @@ int main()
         }), UINT64_MAX));
     };
 
+    // Initialize vk-wsi
+
+    vkwsi_context* context;
+    vk_check(vkwsi_context_create(&context, {
+        .instance = instance,
+        .device = device,
+        .physical_device = physical_device,
+        .get_instance_proc_addr = vkGetInstanceProcAddr,
+    }));
+    defer { vkwsi_context_destroy(context); };
+
     // Create window and surface
 
     auto window = SDL_CreateWindow("vk-wsi", 1920, 1080, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
@@ -363,30 +374,30 @@ int main()
         }
     }
 
-    vkwsi_context context;
-    vk_check(vkwsi_context_init(&context, {
-        .instance = instance,
-        .device = device,
-        .physical_device = physical_device,
-        .get_instance_proc_addr = vkGetInstanceProcAddr,
-    }));
-    defer { vkwsi_context_destroy(&context); };
+    vkwsi_swapchain* swapchain;
+    vk_check(vkwsi_swapchain_create(&swapchain, context, surface));
+    defer { vkwsi_swapchain_destroy(swapchain); };
+    {
+        vkwsi_swapchain_info sw_info = {};
+        sw_info.image_sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
+        sw_info.queue_families = { queue_family };
+        sw_info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    vkwsi_swapchain swapchain;
-    vk_check(vkwsi_swapchain_init(&swapchain, &context, surface));
-    defer { vkwsi_swapchain_destroy(&swapchain); };
-    swapchain.info.image_sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
-    swapchain.info.queue_families = { queue_family };
-    swapchain.info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    // swapchain.info.min_image_count = 2;
-    // swapchain.info.present_mode = VK_PRESENT_MODE_FIFO_KHR;
-    swapchain.info.min_image_count = 4;
-    swapchain.info.present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
-    swapchain.info.format = surface_format.format;
-    swapchain.info.color_space = surface_format.colorSpace;
+        // sw_info.min_image_count = 2;
+        // sw_info.present_mode = VK_PRESENT_MODE_FIFO_KHR;
+
+        sw_info.min_image_count = 4;
+        sw_info.present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+
+        sw_info.format = surface_format.format;
+        sw_info.color_space = surface_format.colorSpace;
+        vkwsi_swapchain_set_info(swapchain, std::move(sw_info));
+    }
 
     auto last_report = std::chrono::steady_clock::now();
     uint32_t fps = 0;
+
+    defer { wait_semaphore(semaphore_last_value); };
 
     SDL_Event event;
     for (;;) {
@@ -423,7 +434,7 @@ int main()
         int w, h;
         SDL_GetWindowSizeInPixels(window, &w, &h);
         VkExtent2D extent { uint32_t(w), uint32_t(h) };
-        vk_check(vkwsi_swapchain_resize(&swapchain, extent));
+        vk_check(vkwsi_swapchain_resize(swapchain, extent));
 
         VkSemaphoreSubmitInfoKHR image_ready {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -432,11 +443,11 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
-        std::array swapchains { &swapchain };
+        std::array swapchains { swapchain };
         vk_check(vkwsi_swapchain_acquire(swapchains, queue, {image_ready}));
         // vk_check(vkwsi_swapchain_acquire(swapchains, queue, {}));
 
-        auto current = vkwsi_swapchain_get_current(&swapchain);
+        auto current = vkwsi_swapchain_get_current(swapchain);
         auto image = current.image;
 
         auto transition = [&](VkCommandBuffer cmd, VkImage image,
