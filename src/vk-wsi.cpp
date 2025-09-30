@@ -111,6 +111,8 @@ void vkwsi_context_destroy(vkwsi_context* ctx)
         ctx->DestroyFence(ctx->device, fence, ctx->alloc);
     }
 
+    ctx->DestroySemaphore(ctx->device, ctx->timeline, ctx->alloc);
+
     delete ctx;
 }
 

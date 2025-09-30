@@ -57,4 +57,4 @@ void                  vkwsi_swapchain_set_info(vkwsi_swapchain* swapchain, vkwsi
 VkResult              vkwsi_swapchain_resize(vkwsi_swapchain* swapchain, VkExtent2D extent);
 VkResult              vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*>, VkQueue adapter_queue, std::span<const VkSemaphoreSubmitInfo> signals);
 vkwsi_swapchain_image vkwsi_swapchain_get_current(vkwsi_swapchain* swapchain);
-VkResult              vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue adapter_queue, std::span<const VkSemaphoreSubmitInfo> waits, bool host_wait);
+VkResult              vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue queue, std::span<const VkSemaphoreSubmitInfo> waits, bool host_wait);

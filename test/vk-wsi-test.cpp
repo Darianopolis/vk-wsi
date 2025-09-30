@@ -349,35 +349,54 @@ int main()
 
     // Create window and surface
 
-    auto window = SDL_CreateWindow("vk-wsi", 1920, 1080, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
-    defer { SDL_DestroyWindow(window); };
+    uint32_t num_windows = 2;
 
-    // auto renderer = SDL_CreateRenderer(window, nullptr);
-    // defer { SDL_DestroyRenderer(renderer); };
-
-    VkSurfaceKHR surface = {};
-    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) {
-        error(std::source_location::current(), "Failed to create SDL Vulkan surface: {}", SDL_GetError());
-    }
-    defer { vkDestroySurfaceKHR(instance, surface, nullptr); };
-
-    // Select surface format
-
-    VkSurfaceFormatKHR surface_format = {};
-    std::vector<VkSurfaceFormatKHR> surface_formats;
-    vk_enumerate(surface_formats, vkGetPhysicalDeviceSurfaceFormatsKHR, physical_device, surface);
-    for (auto& f : surface_formats) {
-        // if (f.format == VK_FORMAT_R8G8B8A8_SRGB || f.format == VK_FORMAT_B8G8R8A8_SRGB) {
-        if (f.format == VK_FORMAT_R8G8B8A8_UNORM || f.format == VK_FORMAT_B8G8R8A8_UNORM) {
-            surface_format = f;
-            break;
-        }
-    }
-
-    vkwsi_swapchain* swapchain;
-    vk_check(vkwsi_swapchain_create(&swapchain, context, surface));
-    defer { vkwsi_swapchain_destroy(swapchain); };
+    struct window_data
     {
+        SDL_Window* window;
+        VkSurfaceKHR surface;
+        vkwsi_swapchain* swapchain;
+    };
+
+    std::vector<window_data> windows;
+
+    auto window_destroy = [&](window_data& wd)
+    {
+        vkwsi_swapchain_destroy(wd.swapchain);
+        vkDestroySurfaceKHR(instance, wd.surface, nullptr);
+        SDL_DestroyWindow(wd.window);
+    };
+
+    defer {
+        for (auto& wd : windows) {
+            window_destroy(wd);
+        }
+    };
+
+    for (uint32_t i = 0; i < num_windows; ++i) {
+        auto& wd = windows.emplace_back();
+
+        wd.window = SDL_CreateWindow("vk-wsi", 1920, 1080, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+
+        if (!SDL_Vulkan_CreateSurface(wd.window, instance, nullptr, &wd.surface)) {
+            error(std::source_location::current(), "Failed to create SDL Vulkan surface: {}", SDL_GetError());
+        }
+
+        // Select surface format
+
+        VkSurfaceFormatKHR surface_format = {};
+        std::vector<VkSurfaceFormatKHR> surface_formats;
+        vk_enumerate(surface_formats, vkGetPhysicalDeviceSurfaceFormatsKHR, physical_device, wd.surface);
+        for (auto& f : surface_formats) {
+            // if (f.format == VK_FORMAT_R8G8B8A8_SRGB || f.format == VK_FORMAT_B8G8R8A8_SRGB) {
+            if (f.format == VK_FORMAT_R8G8B8A8_UNORM || f.format == VK_FORMAT_B8G8R8A8_UNORM) {
+                surface_format = f;
+                break;
+            }
+        }
+
+        vk_check(vkwsi_swapchain_create(&wd.swapchain, context, wd.surface));
+
         vkwsi_swapchain_info sw_info = {};
         sw_info.image_sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
         sw_info.queue_families = { queue_family };
@@ -391,7 +410,7 @@ int main()
 
         sw_info.format = surface_format.format;
         sw_info.color_space = surface_format.colorSpace;
-        vkwsi_swapchain_set_info(swapchain, std::move(sw_info));
+        vkwsi_swapchain_set_info(wd.swapchain, std::move(sw_info));
     }
 
     auto last_report = std::chrono::steady_clock::now();
@@ -410,6 +429,17 @@ int main()
 
             if (event.type == SDL_EVENT_QUIT) {
                 goto main_loop;
+            }
+
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+                for (auto i = std::begin(windows); i != std::end(windows); i++) {
+                    auto& wd = *i;
+                    if (SDL_GetWindowID(wd.window) == event.window.windowID) {
+                        window_destroy(wd);
+                        windows.erase(i);
+                        break;
+                    }
+                }
             }
         }
 
@@ -431,10 +461,12 @@ int main()
             }
         }
 
-        int w, h;
-        SDL_GetWindowSizeInPixels(window, &w, &h);
-        VkExtent2D extent { uint32_t(w), uint32_t(h) };
-        vk_check(vkwsi_swapchain_resize(swapchain, extent));
+        for (auto& wd : windows) {
+            int w, h;
+            SDL_GetWindowSizeInPixels(wd.window, &w, &h);
+            VkExtent2D extent { uint32_t(w), uint32_t(h) };
+            vk_check(vkwsi_swapchain_resize(wd.swapchain, extent));
+        }
 
         VkSemaphoreSubmitInfoKHR image_ready {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -443,67 +475,67 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
-        std::array swapchains { swapchain };
+        std::vector<vkwsi_swapchain*> swapchains;
+        for (auto& wd : windows) swapchains.emplace_back(wd.swapchain);
         vk_check(vkwsi_swapchain_acquire(swapchains, queue, {image_ready}));
-        // vk_check(vkwsi_swapchain_acquire(swapchains, queue, {}));
-
-        auto current = vkwsi_swapchain_get_current(swapchain);
-        auto image = current.image;
-
-        auto transition = [&](VkCommandBuffer cmd, VkImage image,
-            VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
-            VkAccessFlags2 src_access, VkAccessFlags2 dst_access,
-            VkImageLayout old_layout, VkImageLayout new_layout)
-        {
-            vkCmdPipelineBarrier2(cmd, ptr_to(VkDependencyInfo {
-                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                .imageMemoryBarrierCount = 1,
-                .pImageMemoryBarriers = ptr_to(VkImageMemoryBarrier2 {
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                    .srcStageMask = src,
-                    .srcAccessMask = src_access,
-                    .dstStageMask = dst,
-                    .dstAccessMask = dst_access,
-                    .oldLayout = old_layout,
-                    .newLayout = new_layout,
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = image,
-                    .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
-                }),
-            }));
-        };
-
-        // vk_check(vkResetCommandPool(device, cmd_pool, 0));
 
         vk_check(vkBeginCommandBuffer(cmd, ptr_to(VkCommandBufferBeginInfo {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         })));
 
-        // transition(cmd, image,
-        //     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        //     0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        //     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        for (auto& wd : windows) {
+            auto current = vkwsi_swapchain_get_current(wd.swapchain);
+            auto image = current.image;
 
-        transition(cmd, image,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            VK_ACCESS_2_MEMORY_WRITE_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            auto transition = [&](VkCommandBuffer cmd, VkImage image,
+                VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
+                VkAccessFlags2 src_access, VkAccessFlags2 dst_access,
+                VkImageLayout old_layout, VkImageLayout new_layout)
+            {
+                vkCmdPipelineBarrier2(cmd, ptr_to(VkDependencyInfo {
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .imageMemoryBarrierCount = 1,
+                    .pImageMemoryBarriers = ptr_to(VkImageMemoryBarrier2 {
+                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                        .srcStageMask = src,
+                        .srcAccessMask = src_access,
+                        .dstStageMask = dst,
+                        .dstAccessMask = dst_access,
+                        .oldLayout = old_layout,
+                        .newLayout = new_layout,
+                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                        .image = image,
+                        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+                    }),
+                }));
+            };
 
-        vkCmdClearColorImage(cmd, image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            ptr_to(VkClearColorValue{.float32{0.2f, 0.2f, 0.2f, 1.f}}),
-            1, ptr_to(VkImageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }));
+            // transition(cmd, image,
+            //     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            //     0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            //     VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-        // transition(cmd, image,
-        //     VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
-        //     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            transition(cmd, image,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_WRITE_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-        transition(cmd, image,
-            VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-            VK_ACCESS_2_MEMORY_WRITE_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            vkCmdClearColorImage(cmd, image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                ptr_to(VkClearColorValue{.float32{0.2f, 0.2f, 0.2f, 1.f}}),
+                1, ptr_to(VkImageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }));
+
+            // transition(cmd, image,
+            //     VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
+            //     VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            //     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+            transition(cmd, image,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                VK_ACCESS_2_MEMORY_WRITE_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        }
 
         vk_check(vkEndCommandBuffer(cmd));
 
@@ -530,23 +562,7 @@ int main()
 
         frame.timeline_value = render_complete.value;
 
-        // std::println("Submitting....");
-        // vk_check(vkQueueSubmit2(queue, 1, ptr_to(VkSubmitInfo2 {
-        //     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-        //     .commandBufferInfoCount = 1,
-        //     .pCommandBufferInfos = ptr_to(VkCommandBufferSubmitInfo {
-        //         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-        //         .commandBuffer = cmd,
-        //     }),
-        // }), fence));
-        // wait_and_reset_fence();
-
         vkwsi_swapchain_present(swapchains, queue, { render_complete }, false);
-        // vk_check(vkwsi_swapchain_present(swapchains, queue, {}, false));
-
-        // SDL_SetRenderDrawColor(renderer, 127, 127, 127, 255);
-        // SDL_RenderClear(renderer);
-        // SDL_RenderPresent(renderer);
     }
 main_loop:
 }
