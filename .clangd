@@ -1,0 +1,14 @@
+CompileFlags:
+    Remove: [-fmodules-ts, -fmodule-mapper=*, -fdeps-format=*]
+    Add: [-Wno-gnu-label-as-value, -Wno-c99-designator, -Wno-unknown-warning-option]
+
+Diagnostics:
+    Suppress: [unused-includes, builtin_definition]
+
+InlayHints:
+    Enabled: No
+    ParameterNames: No
+    DeducedTypes: No
+
+SemanticTokens:
+    DisabledKinds: [Operator]
