@@ -8,9 +8,11 @@ find_package(Vulkan REQUIRED)
 # ------------------------------------------------------------------------------
 
 add_library(vk-wsi)
-target_compile_features(vk-wsi PUBLIC cxx_std_26)
-target_sources(vk-wsi PUBLIC src/vk-wsi.cpp)
+target_compile_features(vk-wsi PRIVATE cxx_std_26)
+target_sources(vk-wsi PRIVATE src/vk-wsi.cpp)
 target_include_directories(vk-wsi PUBLIC include)
+
+add_library(vk-wsi::vk-wsi ALIAS vk-wsi)
 
 # ------------------------------------------------------------------------------
 

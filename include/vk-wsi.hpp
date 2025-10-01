@@ -1,10 +1,14 @@
 #pragma once
 
 #ifndef VULKAN_H_
-#define VK_NO_PROTOTYPES
-#include <vulkan/vulkan.h>
+# ifndef VK_NO_PROTOTYPES
+#  define VK_NO_PROTOTYPES
+# endif
+# include <vulkan/vulkan.h>
 #endif
 
+// TODO: Avoid std::vector in the interface
+//       We should also probably avoid span to make this a C-compatible interface
 #include <vector>
 #include <span>
 
@@ -18,22 +22,24 @@ struct vkwsi_context_info
 
 struct vkwsi_context;
 
+// TODO: Add a function for querying what instance and device extensions / features are required?
+
 VkResult vkwsi_context_create(vkwsi_context** ctx, const vkwsi_context_info& info);
 void     vkwsi_context_destroy(vkwsi_context* ctx);
 
 struct vkwsi_swapchain_info
 {
-    uint32_t min_image_count;
+    uint32_t min_image_count = 1;
 
-    VkFormat format;
-    VkColorSpaceKHR color_space;
+    VkFormat format = {};
+    VkColorSpaceKHR color_space = {};
 
     uint32_t image_array_layers = 1;
 
-    VkImageUsageFlags image_usage;
+    VkImageUsageFlags image_usage = {};
 
-    VkSharingMode image_sharing_mode;
-    std::vector<uint32_t> queue_families;
+    VkSharingMode image_sharing_mode = {};
+    std::vector<uint32_t> queue_families = {};
 
     VkSurfaceTransformFlagBitsKHR pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -49,6 +55,7 @@ struct vkwsi_swapchain_image
     VkImage image;
     VkImageView view;
     VkExtent2D extent;
+    uint64_t version;
 };
 
 VkResult              vkwsi_swapchain_create(vkwsi_swapchain** swapchain, vkwsi_context* ctx, VkSurfaceKHR surface);

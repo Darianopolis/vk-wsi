@@ -23,7 +23,7 @@ target_link_libraries(vk-wsi-test PUBLIC
 target_compile_features(vk-wsi PUBLIC cxx_std_26)
 target_sources(vk-wsi-test PUBLIC vk-wsi-test.cpp)
 target_link_libraries(vk-wsi-test PUBLIC
-    vk-wsi
+    vk-wsi::vk-wsi
     SDL3::SDL3
     Backward::Object
     )

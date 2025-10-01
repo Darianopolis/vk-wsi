@@ -9,6 +9,9 @@
 #include <unordered_map>
 
 #define VKWSI_DEBUG_LINEARIZE 0
+#define VKWSI_NOISY_SWAPCHAIN_CREATION 0
+
+// TODO: Implement logging callbacks?
 
 struct vkwsi_acquire_resources
 {
@@ -57,6 +60,7 @@ struct vkwsi_swapchain
     uint32_t image_index;
 
     bool out_of_date = true;
+    uint64_t version = 0;
 
     vkwsi_swapchain_info info = {};
     vkwsi_swapchain_info pending_info = {};

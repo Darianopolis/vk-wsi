@@ -36,19 +36,21 @@ auto vkwsi_enumerate(Container& container, Fn&& fn, Args&&... args)
 
 // -----------------------------------------------------------------------------
 
-// static
-// VkResult wait_and_reset_fence(vkwsi_context* ctx, VkFence fence)
-// {
-//     VkResult res;
+#if VKWSI_DEBUG_LINEARIZE
+static
+VkResult vkwsi_h_wait_and_reset_fence(vkwsi_context* ctx, VkFence fence)
+{
+    VkResult res;
 
-//     res = ctx->WaitForFences(ctx->device, 1, &fence, true, UINT64_MAX);
-//     VKWSI_CHECK(res);
+    res = ctx->WaitForFences(ctx->device, 1, &fence, true, UINT64_MAX);
+    VKWSI_CHECK(res);
 
-//     res = ctx->ResetFences(ctx->device, 1, &fence);
-//     VKWSI_CHECK(res);
+    res = ctx->ResetFences(ctx->device, 1, &fence);
+    VKWSI_CHECK(res);
 
-//     return VK_SUCCESS;
-// }
+    return VK_SUCCESS;
+}
+#endif
 
 // -----------------------------------------------------------------------------
 
@@ -159,6 +161,7 @@ VkResult vkwsi_get_binary_semaphore(vkwsi_context* ctx, VkSemaphore* p_semaphore
     VkResult res;
 
     if (ctx->binary_semaphores.empty()) {
+        // TODO: Separate debug tracking for acquire and present semaphores
         static uint64_t debug_allocated_count = 0;
         std::println("WARN: Allocated new binary sempahore: {}", ++debug_allocated_count);
 
@@ -170,7 +173,6 @@ VkResult vkwsi_get_binary_semaphore(vkwsi_context* ctx, VkSemaphore* p_semaphore
 
         *p_semaphore = semaphore;
     } else {
-        // std::println("INFO: Reusing binary semaphore (count = {})", ctx->binary_semaphores.size());
         *p_semaphore = ctx->binary_semaphores.back();
         ctx->binary_semaphores.pop_back();
     }
@@ -194,13 +196,10 @@ VkResult vkwsi_recover_binary_semaphores(vkwsi_context* ctx)
         res = ctx->GetSemaphoreCounterValue(ctx->device, ctx->timeline, &current_timeline_value);
         VKWSI_CHECK(res);
 
-        // std::println("current timeline value: {}", current_timeline_value);
-
         while (!ctx->acquire_resource_release_queue.empty()) {
             auto& head = ctx->acquire_resource_release_queue.front();
 
             if (current_timeline_value >= head.timeline_value) {
-                // std::println("freeing {} semaphores from value {}", head.semaphores.size(), head.timeline_value);
                 for (auto& sema : head.semaphores) {
                     vkwsi_return_binary_semaphore(ctx, sema);
                 }
@@ -220,8 +219,6 @@ VkResult vkwsi_on_swapchain_present_complete(vkwsi_swapchain* swapchain, uint32_
     auto ctx = swapchain->ctx;
     VkResult res;
 
-    // std::println("\n\nPRESENT {} COMPLETE", idx);
-
     auto& fence = swapchain->resources[idx].present_signal_fence;
     if (fence) {
         res = vkwsi_return_fence(ctx, fence);
@@ -231,7 +228,6 @@ VkResult vkwsi_on_swapchain_present_complete(vkwsi_swapchain* swapchain, uint32_
 
     auto& sema = swapchain->resources[idx].last_present_wait_semaphore;
     if (sema) {
-        // std::println("decrementing present_wait_sema refcount at index {} (current = {})", idx, ctx->present_semaphore_release_map.at(sema));
         if (!--ctx->present_semaphore_release_map.at(sema)) {
             vkwsi_return_binary_semaphore(ctx, sema);
             ctx->present_semaphore_release_map.erase(sema);
@@ -325,7 +321,6 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     vkwsi_wait_all_present_complete(swapchain);
 
     auto info = swapchain->pending_info;
-
     auto desired_extent = swapchain->pending_extent;
 
     VkSurfaceCapabilities2KHR caps { VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR };
@@ -345,6 +340,7 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     auto min_image_count = std::max(info.min_image_count, surface_caps.minImageCount);
     if (surface_caps.maxImageCount) min_image_count = std::min(min_image_count, surface_caps.maxImageCount);
 
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
     std::println("Recreating swapchain");
     std::println("        min_extent = ({:5}, {:5})", surface_caps.minImageExtent.width, surface_caps.minImageExtent.height);
     if (surface_caps.currentExtent.width == 0xFFFFFFFF && surface_caps.currentExtent.height == 0xFFFFFFFF) {
@@ -362,6 +358,22 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     }
         std::println("   min_image_count =  {}", info.min_image_count);
         std::println(" final_image_count =  {}", min_image_count);
+#endif
+
+    // TODO: If `extent` does not match `desired_extent`. Attempt to use swapchain scaling to get closer.
+    //       This should naturally handle different platform quirks.
+    //       E.g. Wayland naturally supports dynamic swapchain sizing, but doesn't support SwapchainPresentScaling
+    //            whereas Windows *only* supports SwapchainPresentScaling in order to match the functionality
+    //            of DXGI swapchains.
+
+    // TODO: Add option to use deferred memory allocation. This may substantially improve swapchain resizing responsiveness
+    //       with some toolkits.
+
+    // TODO: How best should these above quirks be exposed? Should the user specify what toolkit/platform they are using
+    //       and then use an internal list of quirks?
+
+    // TODO: It seems like there a race-condition between querying surface capabilities and creating the swapchain?
+    //       What is the best course of action here?
 
     auto old_swapchain = swapchain->swapchain;
     res = ctx->CreateSwapchainKHR(ctx->device, vkwsi_temp(VkSwapchainCreateInfoKHR {
@@ -383,8 +395,6 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         .oldSwapchain          = old_swapchain,
     }), ctx->alloc, &swapchain->swapchain);
     VKWSI_CHECK(res);
-    // TODO: It seems like there a race-condition between querying surface capabilities and creating the swapchain?
-    //       What is the best course of action here?
 
     vkwsi_destroy_vk_swapchain(swapchain, old_swapchain);
 
@@ -403,17 +413,18 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     swapchain->last_extent = extent;
     swapchain->out_of_date = false;
     swapchain->info = info;
+    swapchain->version++;
 
     return VK_SUCCESS;
 }
 
 VkResult vkwsi_swapchain_resize(vkwsi_swapchain* swapchain, VkExtent2D extent)
 {
+    // TODO: Should this function (or any) be thread safe?
+
     if (extent.width != swapchain->last_extent.width || extent.height != swapchain->last_extent.height) {
         swapchain->pending_extent = extent;
         swapchain->out_of_date = true;
-        // swapchain->last_extent = extent;
-        // return vkwsi_swapchain_recreate(swapchain);
     }
 
     return VK_SUCCESS;
@@ -421,6 +432,10 @@ VkResult vkwsi_swapchain_resize(vkwsi_swapchain* swapchain, VkExtent2D extent)
 
 VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue adapter_queue, std::span<const VkSemaphoreSubmitInfo> _signals)
 {
+    // NOTE: `adapter_queue` technically must be the same for all acquires. As signal operation ordering
+    //       guarantees are relied on for timeline correctness in the (pathological) case that separate
+    //       acquire calls complete out of orders
+
     if (swapchains.empty()) return VK_SUCCESS;
 
     auto ctx = swapchains.front()->ctx;
@@ -432,11 +447,21 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
         VkFence debug_fence = nullptr;
 #endif
 
+    // NOTE: We recovery acquire binary semaphores by polling the main context timeline semaphore
+    //       We could also avoid the additional poll by recovering binary semaphores via the appropriate
+    //       `vkwsi_on_swapchain_present_complete`, however this would force worst-case semaphore reuse.
     vkwsi_recover_binary_semaphores(ctx);
 
     std::vector<VkSemaphoreSubmitInfo> wait_infos(swapchains.size());
     for (uint32_t i = 0; i < swapchains.size(); ++i) {
         auto swapchain = swapchains[i];
+
+        // TODO: How do we recover from errors that occur after we have successfully acquired from *some* swapchains
+        //       We need to ensure all swapchains are still in a recoverable state. (Wait and release swapchain images?)
+
+        // TODO: In the case that `last_extent` does not match `desired_extent`, but the swapchain is still renderable
+        //       and not marked out-of-date, we should still recheck the surface capabilities to see if we can resize
+        //       the swapchain to a more desired size.
 
         if (!swapchain->swapchain || swapchain->out_of_date) vkwsi_swapchain_recreate(swapchain);
 
@@ -461,14 +486,25 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
             VKWSI_CHECK(res);
         }
 #if VKWSI_DEBUG_LINEARIZE
-        wait_and_reset_fence(ctx, debug_fence);
+        res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
+        VKWSI_CHECK(res);
 #endif
         swapchain->image_index = image_idx;
 
-        vkwsi_wait_for_present_complete(swapchain, image_idx);
-        // vkwsi_on_swapchain_present_complete(swapchain, image_idx);
+        // NOTE: In theory we should not have to wait at this point. As acquiring an
+        //       index should imply that all resources from that present are free.
+        //       However, without this wait. The validation layers occasionally
+        //       complain about vkResetFences being used on a VkFecen that is still
+        //       in use. It's possible this is just a VVL false positive, but we work
+        //       around it anyway. Ideally we could just:
+        //
+        //       vkwsi_on_swapchain_present_complete(swapchain, image_idx)
+        res = vkwsi_wait_for_present_complete(swapchain, image_idx);
+        VKWSI_CHECK(res);
 
         if (!swapchain->resources[image_idx].view) {
+            // NOTE: We create image views lazily, this lets us use deferred swapchain allocation
+            //       without any further changes.
             res = ctx->CreateImageView(ctx->device, vkwsi_temp(VkImageViewCreateInfo {
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .image = swapchain->resources[image_idx].image,
@@ -480,6 +516,7 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
         }
     }
 
+    // NOTE: We inject out own timeline semaphore to know when we can recover the allocated binary semaphores
     auto timeline_value = ++ctx->timeline_value;
     std::vector<VkSemaphoreSubmitInfo> signals;
     signals.reserve(_signals.size() + 1);
@@ -501,7 +538,8 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
         VKWSI_CHECK(res);
 
 #if VKWSI_DEBUG_LINEARIZE
-        wait_and_reset_fence(ctx, debug_fence);
+        res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
+        VKWSI_CHECK(res);
 #endif
 
         auto& resources = ctx->acquire_resource_release_queue.emplace_back();
@@ -522,6 +560,7 @@ vkwsi_swapchain_image vkwsi_swapchain_get_current(vkwsi_swapchain* swapchain)
         .image = swapchain->resources[swapchain->image_index].image,
         .view  = swapchain->resources[swapchain->image_index].view,
         .extent = swapchain->last_extent,
+        .version = swapchain->version,
     };
 }
 
@@ -572,7 +611,8 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
             VKWSI_CHECK(res);
 
 #if VKWSI_DEBUG_LINEARIZE
-            wait_and_reset_fence(ctx, debug_fence);
+            res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
+            VKWSI_CHECK(res);
 #endif
         }
     }
@@ -586,6 +626,7 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
         vk_swapchains[i] = sc.swapchain;
         indices[i] = sc.image_index;
 
+        // TODO: This should probably just be an assert. (We should also add more asserts *everywhere*)
         if (sc.resources[sc.image_index].present_signal_fence) {
             std::println("ERROR: Unexpected unreturned fence at index {}", sc.image_index);
         }
@@ -597,6 +638,7 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
         VKWSI_CHECK(res);
     }
 
+    // NOTE: this is not VKWSI_CHECK'd directly. We check each VkResult in `pResults`
     ctx->QueuePresentKHR(queue, vkwsi_temp(VkPresentInfoKHR {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = vkwsi_temp(VkSwapchainPresentFenceInfoKHR {
@@ -612,22 +654,28 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
         .pResults = results.data(),
     }));
 
-    if (binary_sema) {
-        ctx->present_semaphore_release_map[binary_sema] = swapchains.size();
-        for (auto& swapchain : swapchains) {
-            swapchain->resources[swapchain->image_index].last_present_wait_semaphore = binary_sema;
-        }
-    }
-
+    uint32_t successful_presents = 0;
     for (uint32_t i = 0; i < swapchains.size(); ++i) {
         if (results[i] == VK_ERROR_OUT_OF_DATE_KHR) {
             swapchains[i]->out_of_date = true;
             continue;
         }
-        if (results[i] == VK_SUBOPTIMAL_KHR) {
-            continue;
+        if (results[i] != VK_SUBOPTIMAL_KHR) {
+            // TODO: Same as acquire, we need to handle a critical error here while leaving everything
+            //       in an otherwise recoverable state.
+            //       E.g. Note errors, continue on to setup binary semaphore recovery. Then return error code.
+            VKWSI_CHECK(results[i]);
         }
-        VKWSI_CHECK(results[i]);
+        successful_presents++;
+    }
+
+    if (binary_sema) {
+        ctx->present_semaphore_release_map[binary_sema] = successful_presents;
+        for (auto& swapchain : swapchains) {
+            if (!swapchain->out_of_date) {
+                swapchain->resources[swapchain->image_index].last_present_wait_semaphore = binary_sema;
+            }
+        }
     }
 
 #if VKWSI_DEBUG_LINEARIZE

@@ -12,9 +12,20 @@ using namespace std::literals;
 
 // -----------------------------------------------------------------------------
 
+// NOTE: Forces host waits after acquire and rendering work
+#define VKWSI_TEST_FORCE_LINEARIZATION 0
+
+// -----------------------------------------------------------------------------
+
+// NOTE: This is because of GPU drivers and Vulkan Validation Layers resulting
+//       in many unavoidable leak warnings
+// TODO: Leave this to runtime environment configuration?
+// TODO: Use a tracking allocator to track *our* leaks?
 extern "C" const char* __asan_default_options() { return "detect_leaks=0"; }
 
 // -----------------------------------------------------------------------------
+
+// TODO: Create a separate test harness to keep boilerplate clutter away from test/example logic
 
 template<typename Fn>
 struct Defer
@@ -175,7 +186,6 @@ int main()
     VkDevice device = {};
     std::array device_extensions {
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
         VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME,
     };
 
@@ -190,7 +200,6 @@ int main()
                         .swapchainMaintenance1 = true,
                     }),
                 .synchronization2 = true,
-                .dynamicRendering = true,
             }),
             .timelineSemaphore = true,
         }),
@@ -326,12 +335,12 @@ int main()
     auto next_sema_value = [&] {
         return ++semaphore_last_value;
     };
-    auto wait_semaphore = [&](uint64_t value) {
+    auto wait_semaphore = [&](VkSemaphore sema, uint64_t value) {
         // std::println("waiting on semaphore value: {}", semaphore_last_value);
         vk_check(vkWaitSemaphores(device, ptr_to(VkSemaphoreWaitInfo {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
             .semaphoreCount = 1,
-            .pSemaphores = &semaphore,
+            .pSemaphores = &sema,
             .pValues = ptr_to(value),
         }), UINT64_MAX));
     };
@@ -349,7 +358,7 @@ int main()
 
     // Create window and surface
 
-    uint32_t num_windows = 2;
+    uint32_t num_windows = 1;
 
     struct window_data
     {
@@ -376,11 +385,13 @@ int main()
     for (uint32_t i = 0; i < num_windows; ++i) {
         auto& wd = windows.emplace_back();
 
-        wd.window = SDL_CreateWindow("vk-wsi", 1920, 1080, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        wd.window = SDL_CreateWindow("vk-wsi", 800, 600, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
 
         if (!SDL_Vulkan_CreateSurface(wd.window, instance, nullptr, &wd.surface)) {
             error(std::source_location::current(), "Failed to create SDL Vulkan surface: {}", SDL_GetError());
         }
+
+        vk_check(vkwsi_swapchain_create(&wd.swapchain, context, wd.surface));
 
         // Select surface format
 
@@ -395,12 +406,12 @@ int main()
             }
         }
 
-        vk_check(vkwsi_swapchain_create(&wd.swapchain, context, wd.surface));
-
         vkwsi_swapchain_info sw_info = {};
         sw_info.image_sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
         sw_info.queue_families = { queue_family };
         sw_info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        // TODO: Test runtime parameters
 
         // sw_info.min_image_count = 2;
         // sw_info.present_mode = VK_PRESENT_MODE_FIFO_KHR;
@@ -416,7 +427,7 @@ int main()
     auto last_report = std::chrono::steady_clock::now();
     uint32_t fps = 0;
 
-    defer { wait_semaphore(semaphore_last_value); };
+    defer { wait_semaphore(semaphore, semaphore_last_value); };
 
     SDL_Event event;
     for (;;) {
@@ -449,7 +460,7 @@ int main()
 
         // std::println("FRAME START {}", frame);
         // std::println("waiting for frame, timeline = {}", frame.timeline_value);
-        wait_semaphore(frame.timeline_value);
+        wait_semaphore(semaphore, frame.timeline_value);
 
         {
             fps++;
@@ -478,6 +489,10 @@ int main()
         std::vector<vkwsi_swapchain*> swapchains;
         for (auto& wd : windows) swapchains.emplace_back(wd.swapchain);
         vk_check(vkwsi_swapchain_acquire(swapchains, queue, {image_ready}));
+
+#if VKWSI_TEST_FORCE_LINEARIZATION
+        wait_semaphore(semaphore, image_ready.value);
+#endif
 
         vk_check(vkBeginCommandBuffer(cmd, ptr_to(VkCommandBufferBeginInfo {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -510,6 +525,9 @@ int main()
                     }),
                 }));
             };
+
+            // TODO: Update to latest git version of VVL and aim for zero synchronization validation warnings
+            //       Need to check on status of synchronization layers when using timeline semaphores!
 
             // transition(cmd, image,
             //     VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -558,7 +576,10 @@ int main()
             .signalSemaphoreInfoCount = 1,
             .pSignalSemaphoreInfos = &render_complete,
         }), nullptr));
-        // wait_semaphore();
+
+#if VKWSI_TEST_FORCE_LINEARIZATION
+        wait_semaphore(semaphore, render_complete.value);
+#endif
 
         frame.timeline_value = render_complete.value;
 
