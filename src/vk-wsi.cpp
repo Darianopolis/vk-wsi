@@ -5,6 +5,7 @@
 #include <utility>
 #include <concepts>
 #include <algorithm>
+#include <numbers>
 
 static
 auto* vkwsi_temp(auto&& v)
@@ -562,6 +563,8 @@ VkResult vkwsi_swapchain_resize(vkwsi_swapchain* swapchain, VkExtent2D extent)
     if (extent.width != swapchain->last_extent.width || extent.height != swapchain->last_extent.height) {
         swapchain->pending_extent = extent;
         // TODO: Instead of marking this out-of-date, we should check surface capabilities if pending != current
+        //       This currently forces a recreation, even if the final extent ends up matching the last_extent
+        //       since OUT_OF_DATE signals that we *must* recreate the swapchain even with identical capabilities.
         swapchain->out_of_date = true;
     }
 
@@ -600,12 +603,6 @@ VkResult vkwsi_swapchain_acquire(
         // TODO: How do we recover from errors that occur after we have successfully acquired from *some* swapchains
         //       We need to ensure all swapchains are still in a recoverable state. (Wait and release swapchain images?)
 
-        // TODO: In the case that `last_extent` does not match `desired_extent`, but the swapchain is still renderable
-        //       and not marked out-of-date, we should still recheck the surface capabilities to see if we can resize
-        //       the swapchain to a more desired size.
-
-        // if (!swapchain->swapchain || swapchain->out_of_date) vkwsi_swapchain_recreate(swapchain);
-
         uint32_t image_idx;
 
         VkSemaphore wait_semaphore = nullptr;
@@ -628,6 +625,10 @@ VkResult vkwsi_swapchain_acquire(
         //       an arbitrary number of times up until the user stops a resize operation.
 
         for (;;) {
+
+            // TODO: In the case that `last_extent` does not match `desired_extent`, but the swapchain is still renderable
+            //       and not marked out-of-date, we should still recheck the surface capabilities to see if we can resize
+            //       the swapchain to a more desired size.
             if (swapchain->out_of_date) {
                 res = vkwsi_swapchain_recreate(swapchain);
                 VKWSI_CHECK(res);
@@ -658,11 +659,12 @@ VkResult vkwsi_swapchain_acquire(
         // NOTE: In theory we should not have to wait at this point. As acquiring an
         //       index should imply that all resources from that present are free.
         //       However, without this wait. The validation layers occasionally
-        //       complain about vkResetFences being used on a VkFecen that is still
+        //       complain about vkResetFences being used on a VkFence that is still
         //       in use. It's possible this is just a VVL false positive, but we work
         //       around it anyway. Ideally we could just:
         //
-        //       vkwsi_on_swapchain_present_complete(swapchain, image_idx)
+        //           vkwsi_on_swapchain_present_complete(swapchain, image_idx)
+        //
         res = vkwsi_wait_for_present_complete(swapchain, image_idx);
         VKWSI_CHECK(res);
 
@@ -680,25 +682,41 @@ VkResult vkwsi_swapchain_acquire(
         }
     }
 
-    // NOTE: We inject out own timeline semaphore to know when we can recover the allocated binary semaphores
-    auto timeline_value = ++ctx->timeline_value;
     std::vector<VkSemaphoreSubmitInfo> signals;
     signals.reserve(_signal_count + 1);
-    for (uint32_t i = 0; i < _signal_count; ++i) {
-        signals.emplace_back(_signals[i]);
-    }
     signals.emplace_back(VkSemaphoreSubmitInfo {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
         .semaphore = ctx->timeline,
-        .value = timeline_value,
+        // NOTE: `value` is set when we make the the final submission
+        //       We could calculate it in closed form, but I'm lazy.
     });
+    for (uint32_t i = 0; i < _signal_count; ++i) {
+        signals.emplace_back(_signals[i]);
+    }
 
-    {
+    // TODO: Workaround for deadlocking waiting on many binary semaphores by limiting
+    //       how many we wait on each queue submission. Thanks to signal order guarantees
+    //       this results in identical behaviour, just with a bit more overhead (but acquiring
+    //       and presenting from multiple windows is already *expensive* even without factoring this in)
+
+    uint32_t max_binary_waits = 2;
+    if (swapchain_count > 3) max_binary_waits = 1;
+
+    uint32_t timeline_value = ctx->timeline_value;
+    for (uint32_t i = 0; i < swapchain_count; i += max_binary_waits) {
+        auto count = std::min(i + max_binary_waits, swapchain_count) - i;
+        bool last = i + count >= swapchain_count;
+
+        timeline_value = ++ctx->timeline_value;
+        if (last) {
+            signals[0].value = timeline_value;
+        }
+
         res = ctx->QueueSubmit2(adapter_queue, 1, vkwsi_temp(VkSubmitInfo2 {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .waitSemaphoreInfoCount = swapchain_count,
-            .pWaitSemaphoreInfos = wait_infos.data(),
-            .signalSemaphoreInfoCount = uint32_t(signals.size()),
+            .waitSemaphoreInfoCount = count,
+            .pWaitSemaphoreInfos = wait_infos.data() + i,
+            .signalSemaphoreInfoCount = last ? (_signal_count + 1) : 1,
             .pSignalSemaphoreInfos = signals.data(),
         }), debug_fence);
         VKWSI_CHECK(res);
@@ -707,13 +725,13 @@ VkResult vkwsi_swapchain_acquire(
         res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
         VKWSI_CHECK(res);
 #endif
+    }
 
-        auto& resources = ctx->acquire_resource_release_queue.emplace_back();
-        resources.timeline_value = timeline_value;
-        resources.semaphores.resize(swapchain_count);
-        for (uint32_t i = 0; i < swapchain_count; ++i) {
-            resources.semaphores[i] = wait_infos[i].semaphore;
-        }
+    auto& resources = ctx->acquire_resource_release_queue.emplace_back();
+    resources.timeline_value = timeline_value;
+    resources.semaphores.resize(swapchain_count);
+    for (uint32_t i = 0; i < swapchain_count; ++i) {
+        resources.semaphores[i] = wait_infos[i].semaphore;
     }
 
     return VK_SUCCESS;

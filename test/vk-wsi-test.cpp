@@ -9,14 +9,13 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
+#include <cmath>
 
 using namespace std::literals;
 
 // -----------------------------------------------------------------------------
 
-// Force host waits after acquire and rendering work
 #define VKWSI_TEST_FORCE_LINEARIZATION 0
-
 #define VKWSI_TEST_REPORT_METRICS 1
 
 // -----------------------------------------------------------------------------
@@ -111,6 +110,7 @@ int main()
 
     static constexpr uint32_t num_windows = 1;
     static constexpr uint32_t frames_in_flight = 3;
+    static constexpr VkExtent2D initial_window_size = { 800, 600 };
 
 // -----------------------------------------------------------------------------
 
@@ -290,6 +290,22 @@ int main()
     }), nullptr, &cmd_pool));
     defer { vkDestroyCommandPool(device, cmd_pool, nullptr); };
 
+    // Animated color value to show render progress
+
+    auto time_start = std::chrono::steady_clock::now();
+    auto get_clear_color = [&] {
+
+        static constexpr auto period_ms = 4000;
+        static constexpr float amplitude = 0.5f;
+
+        auto now = std::chrono::steady_clock::now();
+        auto delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - time_start).count();
+        auto normalized_ms = (delta_ms - period_ms * (delta_ms / period_ms));
+        auto normalized_s = float(normalized_ms) / period_ms;
+        auto wave = std::sin(normalized_s * std::numbers::pi_v<float>) * amplitude;
+        return VkClearColorValue{.float32{0.3f, 0.3f, wave, 1.f}};
+    };
+
     uint64_t frame = 0;
 
     struct frame_resources
@@ -339,7 +355,10 @@ int main()
 
         // Create window
 
-        wd.window = SDL_CreateWindow(std::format("vk-wsi-{}", i + 1).c_str(), 800, 600, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        wd.window = SDL_CreateWindow(
+            std::format("vk-wsi-{}", i + 1).c_str(),
+            initial_window_size.width, initial_window_size.height,
+            SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
 
         if (!SDL_Vulkan_CreateSurface(wd.window, instance, nullptr, &wd.surface)) {
             error(std::source_location::current(), "Failed to create SDL Vulkan surface: {}", SDL_GetError());
@@ -368,7 +387,10 @@ int main()
         sw_info.queue_family_count = 1;
         sw_info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-        VkPresentModeKHR present_modes[] { VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR };
+        VkPresentModeKHR present_modes[] {
+            VK_PRESENT_MODE_MAILBOX_KHR,
+            VK_PRESENT_MODE_FIFO_KHR
+        };
         sw_info.present_mode = vkwsi_context_pick_present_mode(context, wd.surface, present_modes, std::size(present_modes));
 
         switch (sw_info.present_mode) {
@@ -488,6 +510,9 @@ int main()
             auto current = vkwsi_swapchain_get_current(wd->swapchain);
             auto image = current.image;
 
+            // NOTE: This forms a closed-loop system that corrects known extent to the achieved extent.
+            wd->extent.store(current.extent);
+
             auto transition = [&](VkCommandBuffer cmd, VkImage image,
                 VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
                 VkAccessFlags2 src_access, VkAccessFlags2 dst_access,
@@ -527,7 +552,7 @@ int main()
 
             vkCmdClearColorImage(cmd, image,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                ptr_to(VkClearColorValue{.float32{0.2f, 0.2f, 0.2f, 1.f}}),
+                ptr_to(get_clear_color()),
                 1, ptr_to(VkImageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }));
 
             // transition(cmd, image,
@@ -590,28 +615,29 @@ int main()
     // NOTE: Window size events need to be handled from an event watched as the main event loop
     //       isn't running during resize operations on Windows due to modal resizing.
 
-    auto sdl_event_listener = [&](SDL_Event* event) {
-        if (SDL_IsMainThread()) {
-            if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-                auto w = event->window.data1;
-                auto h = event->window.data2;
-                std::scoped_lock m{ windows_mutex };
-                for (auto& wd : windows) {
-                    if (SDL_GetWindowID(wd->window) == event->window.windowID) {
-                        // log("Window {} resized ({}, {})", (void*)wd->window, w, h);
-                        wd->extent = { uint32_t(w), uint32_t(h) };
-                        break;
-                    }
+    auto event_watch = [&](SDL_Event* event) {
+        if (!SDL_IsMainThread()) {
+            log("WARN: Event Listener called from other thread!");
+            return;
+        }
+
+        if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            auto w = event->window.data1;
+            auto h = event->window.data2;
+            std::scoped_lock m{ windows_mutex };
+            for (auto& wd : windows) {
+                if (SDL_GetWindowID(wd->window) == event->window.windowID) {
+                    log("Window {} resized ({}, {}) (id = {})", (void*)wd->window, w, h, event->window.windowID);
+                    wd->extent = { uint32_t(w), uint32_t(h) };
+                    break;
                 }
             }
-        } else {
-            log("WARN: Event Listener called from other thread!");
         }
     };
     SDL_AddEventWatch([](void *userdata, SDL_Event *event) -> bool {
-        (*(decltype(sdl_event_listener)*)userdata)(event);
+        (*(decltype(event_watch)*)userdata)(event);
         return true;
-    }, &sdl_event_listener);
+    }, &event_watch);
 
     // Main thread event loop
 
@@ -624,9 +650,8 @@ int main()
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             std::scoped_lock m{ windows_mutex };
             for (auto& wd : windows) {
-                auto id = SDL_GetWindowID(wd->window);
-                if (id == event.window.windowID) {
-                    log("Window {} close requested (id = {})", (void*)wd->window, id);
+                if (SDL_GetWindowID(wd->window) == event.window.windowID) {
+                    log("Window {} close requested (id = {})", (void*)wd->window, event.window.windowID);
                     wd->close_requested = true;
                     break;
                 }
