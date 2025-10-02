@@ -1,6 +1,7 @@
 #include "vk-wsi-impl.hpp"
 
 #include <print>
+#include <utility>
 
 static
 auto* vkwsi_temp(auto&& v)
@@ -342,6 +343,7 @@ VkResult vkwsi_swapchain_create(vkwsi_swapchain** pp_swapchain, vkwsi_context* c
 
     swapchain->ctx = ctx;
     swapchain->surface = surface;
+    swapchain->out_of_date = true;
 
     *pp_swapchain = swapchain;
 
@@ -355,7 +357,7 @@ void vkwsi_swapchain_set_info(vkwsi_swapchain* swapchain, const vkwsi_swapchain_
 }
 
 static
-void vkwsi_destroy_vk_swapchain(vkwsi_swapchain* swapchain, VkSwapchainKHR vk_swapchain)
+void vkwsi_destroy_vk_swapchain(vkwsi_swapchain* swapchain)
 {
     auto ctx = swapchain->ctx;
 
@@ -363,13 +365,13 @@ void vkwsi_destroy_vk_swapchain(vkwsi_swapchain* swapchain, VkSwapchainKHR vk_sw
         ctx->DestroyImageView(ctx->device, res.view, ctx->alloc);
     }
 
-    ctx->DestroySwapchainKHR(ctx->device, vk_swapchain, ctx->alloc);
+    ctx->DestroySwapchainKHR(ctx->device, swapchain->swapchain, ctx->alloc);
 }
 
 void vkwsi_swapchain_destroy(vkwsi_swapchain* swapchain)
 {
     vkwsi_wait_all_present_complete(swapchain);
-    vkwsi_destroy_vk_swapchain(swapchain, swapchain->swapchain);
+    vkwsi_destroy_vk_swapchain(swapchain);
 
     delete swapchain;
 }
@@ -385,22 +387,26 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     auto info = swapchain->pending_info;
     auto desired_extent = swapchain->pending_extent;
 
-    VkSurfaceCapabilities2KHR caps { VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR };
+    VkSurfacePresentScalingCapabilitiesEXT scaling_caps {
+        .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT,
+    };
+
+    VkSurfaceCapabilities2KHR caps {
+        .sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR,
+        .pNext = &scaling_caps,
+    };
+
     res = ctx->GetPhysicalDeviceSurfaceCapabilities2KHR(ctx->physical_device, vkwsi_temp(VkPhysicalDeviceSurfaceInfo2KHR {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR,
+        .pNext = vkwsi_temp(VkSurfacePresentModeKHR {
+            .sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_KHR,
+            .presentMode = swapchain->pending_info.present_mode,
+        }),
         .surface = swapchain->surface,
     }), &caps);
     VKWSI_CHECK(res);
 
     auto& surface_caps = caps.surfaceCapabilities;
-
-    auto extent = VkExtent2D {
-        .width = std::clamp(desired_extent.width, surface_caps.minImageExtent.width, surface_caps.maxImageExtent.width),
-        .height = std::clamp(desired_extent.height, surface_caps.minImageExtent.height, surface_caps.maxImageExtent.width),
-    };
-
-    auto min_image_count = std::max(info.min_image_count, surface_caps.minImageCount);
-    if (surface_caps.maxImageCount) min_image_count = std::min(min_image_count, surface_caps.maxImageCount);
 
 #if VKWSI_NOISY_SWAPCHAIN_CREATION
     std::println("Recreating swapchain");
@@ -412,35 +418,84 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     }
     std::println("        max_extent = ({:5}, {:5})", surface_caps.maxImageExtent.width, surface_caps.maxImageExtent.height);
     std::println("    desired_extent = ({:5}, {:5})", desired_extent.width, desired_extent.height);
+#endif
+
+    auto extent = VkExtent2D {
+        .width = std::clamp(desired_extent.width, surface_caps.minImageExtent.width, surface_caps.maxImageExtent.width),
+        .height = std::clamp(desired_extent.height, surface_caps.minImageExtent.height, surface_caps.maxImageExtent.height),
+    };
+
+    VkPresentScalingFlagBitsEXT scaling_mode = {};
+    if (scaling_caps.supportedPresentScaling) {
+        auto min = scaling_caps.minScaledImageExtent;
+        auto max = scaling_caps.maxScaledImageExtent;
+        std::println("  scaling caps = ({}, {}) -- ({}, {})", min.width, min.height, max.width, max.height);
+
+        auto scaled_width = std::clamp(desired_extent.width, min.width, max.width);
+        auto scaled_height = std::clamp(desired_extent.height, min.height, max.height);
+        if (scaled_width == desired_extent.width && scaled_height == desired_extent.height) {
+
+            // Only use swapchain scaling if it would let us achieve our desired swapchain size
+
+            if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT) {
+                scaling_mode = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT;
+                std::println("  using scaling mode: VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT");
+            } else if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT) {
+                scaling_mode = VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT;
+                std::println("  using scaling mode: VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT");
+            } else if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_EXT) {
+                scaling_mode = VK_PRESENT_SCALING_STRETCH_BIT_EXT;
+                std::println("  using scaling mode: VK_PRESENT_SCALING_STRETCH_BIT_EXT");
+            } else if (scaling_caps.supportedPresentScaling) {
+                // Fallback to selecting the "first" available scaling mode if we don't recognize any
+                scaling_mode = VkPresentScalingFlagBitsEXT(1 << std::countr_zero(scaling_caps.supportedPresentScaling));
+                std::println("  using unknown scaling mode: {}", std::to_underlying(scaling_mode));
+            }
+
+            if (scaling_mode) {
+                extent = { scaled_width, scaled_height };
+            }
+        }
+
+        VkPresentScalingFlagsEXT flags;
+    }
+
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
     std::println("      final_extent = ({:5}, {:5})", extent.width, extent.height);
+
     if (surface_caps.maxImageCount) {
         std::println("  caps_image_count = ({}..{})", surface_caps.minImageCount, surface_caps.maxImageCount);
     } else {
         std::println("  caps_image_count = ({}..)", surface_caps.minImageCount);
     }
-        std::println("   min_image_count =  {}", info.min_image_count);
-        std::println(" final_image_count =  {}", min_image_count);
+    std::println("   min_image_count =  {}", info.min_image_count);
 #endif
 
-    // TODO: If `extent` does not match `desired_extent`. Attempt to use swapchain scaling to get closer.
-    //       This should naturally handle different platform quirks.
-    //       E.g. Wayland naturally supports dynamic swapchain sizing, but doesn't support SwapchainPresentScaling
-    //            whereas Windows *only* supports SwapchainPresentScaling in order to match the functionality
-    //            of DXGI swapchains.
+    auto min_image_count = std::max(info.min_image_count, surface_caps.minImageCount);
+    if (surface_caps.maxImageCount) min_image_count = std::min(min_image_count, surface_caps.maxImageCount);
 
-    // TODO: Add option to use deferred memory allocation. This may substantially improve swapchain resizing responsiveness
-    //       with some toolkits.
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
+    std::println(" final_image_count =  {}", min_image_count);
+#endif
 
-    // TODO: How best should these above quirks be exposed? Should the user specify what toolkit/platform they are using
-    //       and then use an internal list of quirks?
+    // TODO: There is an inherent race condition between querying surface capabilities and creating the swapchain
+    //       We need to identify such error conditions continously attempt to recreate the swapchain until we succeed.
+    //       Note that acquisition also races, so we need to loop both until we successfully acquire an image.
 
-    // TODO: It seems like there a race-condition between querying surface capabilities and creating the swapchain?
-    //       What is the best course of action here?
-
-    auto old_swapchain = swapchain->swapchain;
+    VkSwapchainKHR new_swapchain = {};
     res = ctx->CreateSwapchainKHR(ctx->device, vkwsi_temp(VkSwapchainCreateInfoKHR {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        // .flags = VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR,
+        .pNext = scaling_mode
+            ? vkwsi_temp(VkSwapchainPresentScalingCreateInfoEXT {
+                .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_EXT,
+                .scalingBehavior = scaling_mode,
+            })
+            : nullptr,
+        // NOTE: Deferred allocation improves latency when recreating swapchains and reduces the likelihood
+        //       of failing to acquire immediately after a resize.
+        //       However, it can result in swapchain images being allocated individually, which may have *some* impact
+        //       so we might choose to make this configurable too.
+        .flags = VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR,
         .surface               = swapchain->surface,
         .minImageCount         = min_image_count,
         .imageFormat           = info.format,
@@ -454,11 +509,14 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         .preTransform          = info.pre_transform,
         .compositeAlpha        = info.composite_alpha,
         .presentMode           = info.present_mode,
-        .oldSwapchain          = old_swapchain,
-    }), ctx->alloc, &swapchain->swapchain);
+        .oldSwapchain          = swapchain->swapchain,
+    }), ctx->alloc, &new_swapchain);
     VKWSI_CHECK(res);
 
-    vkwsi_destroy_vk_swapchain(swapchain, old_swapchain);
+    // Replace the swapchain
+
+    vkwsi_destroy_vk_swapchain(swapchain);
+    swapchain->swapchain = new_swapchain;
 
     std::vector<VkImage> images;
     vkwsi_enumerate(images, ctx->GetSwapchainImagesKHR, ctx->device, swapchain->swapchain);
@@ -528,12 +586,19 @@ VkResult vkwsi_swapchain_acquire(
         //       and not marked out-of-date, we should still recheck the surface capabilities to see if we can resize
         //       the swapchain to a more desired size.
 
-        if (!swapchain->swapchain || swapchain->out_of_date) vkwsi_swapchain_recreate(swapchain);
+        // if (!swapchain->swapchain || swapchain->out_of_date) vkwsi_swapchain_recreate(swapchain);
 
         uint32_t image_idx;
 
         VkSemaphore wait_semaphore = nullptr;
         res = vkwsi_get_binary_semaphore(ctx, &wait_semaphore);
+        VKWSI_CHECK(res);
+        res = ctx->SetDebugUtilsObjectNameEXT(ctx->device, vkwsi_temp(VkDebugUtilsObjectNameInfoEXT {
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .objectType = VK_OBJECT_TYPE_SEMAPHORE,
+            .objectHandle = uint64_t(wait_semaphore),
+            .pObjectName = "acquire-semaphore",
+        }));
         VKWSI_CHECK(res);
 
         wait_infos[i] = {
@@ -541,12 +606,28 @@ VkResult vkwsi_swapchain_acquire(
             .semaphore = wait_semaphore,
         };
 
-        res = ctx->AcquireNextImageKHR(ctx->device, swapchain->swapchain, UINT64_MAX, wait_semaphore, debug_fence, &image_idx);
-        if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-            res = vkwsi_swapchain_recreate(swapchain);
-            VKWSI_CHECK(res);
+        // TODO: Should this have a retry limit? This will only retry on OUT-OF-DATE errors, and those could be returned
+        //       an arbitrary number of times up until the user stops a resize operation.
+
+        for (;;) {
+            if (swapchain->out_of_date) {
+                res = vkwsi_swapchain_recreate(swapchain);
+                VKWSI_CHECK(res);
+                if (swapchain->out_of_date) {
+                    std::println("WARN: Failed to recreate swapchain due to surface capabilities race, retrying...");
+                }
+            }
+
             res = ctx->AcquireNextImageKHR(ctx->device, swapchain->swapchain, UINT64_MAX, wait_semaphore, debug_fence, &image_idx);
+            if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+                swapchain->out_of_date = true;
+                std::println("WARN: Failed to acquire image due to OUT-OF-DATE condition, retrying...");
+                continue;
+            }
+
+            break;
         }
+
         if (res != VK_SUBOPTIMAL_KHR) {
             VKWSI_CHECK(res);
         }
@@ -665,6 +746,13 @@ VkResult vkwsi_swapchain_present(
         } else {
             res = vkwsi_get_binary_semaphore(ctx, &binary_sema);
             VKWSI_CHECK(res);
+            res = ctx->SetDebugUtilsObjectNameEXT(ctx->device, vkwsi_temp(VkDebugUtilsObjectNameInfoEXT {
+                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+                .objectType = VK_OBJECT_TYPE_SEMAPHORE,
+                .objectHandle = uint64_t(binary_sema),
+                .pObjectName = "present-semaphore",
+            }));
+            VKWSI_CHECK(res);
 
             res = ctx->QueueSubmit2(queue, 1, vkwsi_temp(VkSubmitInfo2 {
                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
@@ -722,10 +810,11 @@ VkResult vkwsi_swapchain_present(
         .pResults = results.data(),
     }));
 
-    uint32_t successful_presents = 0;
     for (uint32_t i = 0; i < swapchain_count; ++i) {
+        auto& sc = *swapchains[i];
         if (results[i] == VK_ERROR_OUT_OF_DATE_KHR) {
-            swapchains[i]->out_of_date = true;
+            std::println("WARN: Present returned OUT-OF-DATE, marking swapchain...");
+            sc.out_of_date = true;
             continue;
         }
         if (results[i] != VK_SUBOPTIMAL_KHR) {
@@ -734,16 +823,15 @@ VkResult vkwsi_swapchain_present(
             //       E.g. Note errors, continue on to setup binary semaphore recovery. Then return error code.
             VKWSI_CHECK(results[i]);
         }
-        successful_presents++;
     }
 
     if (binary_sema) {
-        ctx->present_semaphore_release_map[binary_sema] = successful_presents;
+        // TODO: Presents that fail with VK_ERROR_OUT_OF_DATE_KHR still enqueue their wait operations, thus we need
+        //       to consider them before safely releasing the fences and semaphores.
+        ctx->present_semaphore_release_map[binary_sema] = swapchain_count;
         for (uint32_t i = 0; i < swapchain_count; ++i) {
             auto* swapchain = swapchains[i];
-            if (!swapchain->out_of_date) {
-                swapchain->resources[swapchain->image_index].last_present_wait_semaphore = binary_sema;
-            }
+            swapchain->resources[swapchain->image_index].last_present_wait_semaphore = binary_sema;
         }
     }
 

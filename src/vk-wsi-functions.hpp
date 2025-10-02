@@ -53,7 +53,8 @@
     DO(DestroyDescriptorPool) \
     DO(CmdClearColorImage) \
     DO(ResetCommandPool) \
-    DO(GetSemaphoreCounterValue)
+    DO(GetSemaphoreCounterValue) \
+    DO(SetDebugUtilsObjectNameEXT)
 
 #define VULKAN_DECLARE_FUNCTION(      funcName, ...) PFN_vk##funcName funcName;
 #define VULKAN_LOAD_INSTANCE_FUNCTION(funcName, ...) functions->funcName = (PFN_vk##funcName)functions->GetInstanceProcAddr(instance, "vk"#funcName);

@@ -110,6 +110,7 @@ int main()
     std::vector<const char*> instance_extensions {
         VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
         VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME,
+        VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
     };
     {
         Uint32 instance_extension_count;
