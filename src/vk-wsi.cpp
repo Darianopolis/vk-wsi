@@ -1,7 +1,10 @@
 #include "vk-wsi-impl.hpp"
 
-#include <print>
+#include <iostream>
+#include <format>
 #include <utility>
+#include <concepts>
+#include <algorithm>
 
 static
 auto* vkwsi_temp(auto&& v)
@@ -31,6 +34,12 @@ auto vkwsi_enumerate(Container& container, Fn&& fn, Args&&... args)
             if (count <= old_count) return;
         }
     }
+}
+
+template<typename ...Args>
+void vkwsi_log(std::format_string<Args...> fmt, Args&&... args)
+{
+    std::cout << std::vformat(fmt.get(), std::make_format_args(args...)) << '\n';
 }
 
 #define VKWSI_CHECK(vkwsi_res) if (vkwsi_res != VK_SUCCESS) return res
@@ -160,23 +169,23 @@ VkPresentModeKHR vkwsi_context_pick_present_mode(vkwsi_context* ctx, VkSurfaceKH
 
     std::vector<VkPresentModeKHR> available_present_modes;
     res = vkwsi_enumerate(available_present_modes, ctx->GetPhysicalDeviceSurfacePresentModesKHR, ctx->physical_device, surface);
-    std::println("AVAILABLE PRESENT MODES:");
+    vkwsi_log("AVAILABLE PRESENT MODES:");
     for (auto pm : available_present_modes) {
-        std::println(" - {}", present_mode_to_string(pm));
+        vkwsi_log(" - {}", present_mode_to_string(pm));
     }
 
     for (uint32_t i = 0; i < present_mode_count; ++i) {
         auto pm = present_modes[i];
-        std::println("CHECKING PRESENT MODE: {}", present_mode_to_string(pm));
+        vkwsi_log("CHECKING PRESENT MODE: {}", present_mode_to_string(pm));
         auto begin = available_present_modes.begin();
         auto end = available_present_modes.end();
         if (std::find(begin, end, pm) != end) {
-            std::println("  AVAILABLE!");
+            vkwsi_log("  AVAILABLE!");
             return pm;
         }
     }
 
-    std::println("FALLING BACK TO FIFO PRESENT MODE");
+    vkwsi_log("FALLING BACK TO FIFO PRESENT MODE");
 
     return VK_PRESENT_MODE_FIFO_KHR;
 }
@@ -188,7 +197,7 @@ VkResult vkwsi_get_fence(vkwsi_context* ctx, VkFence* p_fence)
 
     if (ctx->fences.empty()) {
         static uint64_t debug_allocated_count = 0;
-        std::println("WARN: Allocated new fence: {}", ++debug_allocated_count);
+        vkwsi_log("WARN: Allocated new fence: {}", ++debug_allocated_count);
 
         VkFence fence;
         res = ctx->CreateFence(ctx->device, vkwsi_temp(VkFenceCreateInfo {
@@ -226,7 +235,7 @@ VkResult vkwsi_get_binary_semaphore(vkwsi_context* ctx, VkSemaphore* p_semaphore
     if (ctx->binary_semaphores.empty()) {
         // TODO: Separate debug tracking for acquire and present semaphores
         static uint64_t debug_allocated_count = 0;
-        std::println("WARN: Allocated new binary sempahore: {}", ++debug_allocated_count);
+        vkwsi_log("WARN: Allocated new binary sempahore: {}", ++debug_allocated_count);
 
         VkSemaphore semaphore;
         res = ctx->CreateSemaphore(ctx->device, vkwsi_temp(VkSemaphoreCreateInfo {
@@ -409,15 +418,15 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     auto& surface_caps = caps.surfaceCapabilities;
 
 #if VKWSI_NOISY_SWAPCHAIN_CREATION
-    std::println("Recreating swapchain");
-    std::println("        min_extent = ({:5}, {:5})", surface_caps.minImageExtent.width, surface_caps.minImageExtent.height);
+    vkwsi_log("Recreating swapchain");
+    vkwsi_log("        min_extent = ({:5}, {:5})", surface_caps.minImageExtent.width, surface_caps.minImageExtent.height);
     if (surface_caps.currentExtent.width == 0xFFFFFFFF && surface_caps.currentExtent.height == 0xFFFFFFFF) {
-        std::println("        cur_extent = ( ??? ,  ??? )");
+        vkwsi_log("        cur_extent = ( ??? ,  ??? )");
     } else {
-        std::println("        cur_extent = ({:5}, {:5})", surface_caps.currentExtent.width, surface_caps.currentExtent.height);
+        vkwsi_log("        cur_extent = ({:5}, {:5})", surface_caps.currentExtent.width, surface_caps.currentExtent.height);
     }
-    std::println("        max_extent = ({:5}, {:5})", surface_caps.maxImageExtent.width, surface_caps.maxImageExtent.height);
-    std::println("    desired_extent = ({:5}, {:5})", desired_extent.width, desired_extent.height);
+    vkwsi_log("        max_extent = ({:5}, {:5})", surface_caps.maxImageExtent.width, surface_caps.maxImageExtent.height);
+    vkwsi_log("    desired_extent = ({:5}, {:5})", desired_extent.width, desired_extent.height);
 #endif
 
     auto extent = VkExtent2D {
@@ -425,31 +434,39 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         .height = std::clamp(desired_extent.height, surface_caps.minImageExtent.height, surface_caps.maxImageExtent.height),
     };
 
-    VkPresentScalingFlagBitsEXT scaling_mode = {};
+    VkPresentScalingFlagsKHR scaling_mode = {};
     if (scaling_caps.supportedPresentScaling) {
         auto min = scaling_caps.minScaledImageExtent;
         auto max = scaling_caps.maxScaledImageExtent;
-        std::println("  scaling caps = ({}, {}) -- ({}, {})", min.width, min.height, max.width, max.height);
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
+        vkwsi_log("      scaling_caps = ({}, {}) -- ({}, {})", min.width, min.height, max.width, max.height);
+#endif
 
         auto scaled_width = std::clamp(desired_extent.width, min.width, max.width);
         auto scaled_height = std::clamp(desired_extent.height, min.height, max.height);
         if (scaled_width == desired_extent.width && scaled_height == desired_extent.height) {
 
-            // Only use swapchain scaling if it would let us achieve our desired swapchain size
-
             if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT) {
                 scaling_mode = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT;
-                std::println("  using scaling mode: VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT");
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
+                vkwsi_log("      scaling_mode = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT");
+#endif
             } else if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT) {
                 scaling_mode = VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT;
-                std::println("  using scaling mode: VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT");
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
+                vkwsi_log("      scaling_mode = VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT");
+#endif
             } else if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_EXT) {
                 scaling_mode = VK_PRESENT_SCALING_STRETCH_BIT_EXT;
-                std::println("  using scaling mode: VK_PRESENT_SCALING_STRETCH_BIT_EXT");
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
+                vkwsi_log("      scaling_mode = VK_PRESENT_SCALING_STRETCH_BIT_EXT");
+#endif
             } else if (scaling_caps.supportedPresentScaling) {
                 // Fallback to selecting the "first" available scaling mode if we don't recognize any
                 scaling_mode = VkPresentScalingFlagBitsEXT(1 << std::countr_zero(scaling_caps.supportedPresentScaling));
-                std::println("  using unknown scaling mode: {}", std::to_underlying(scaling_mode));
+#if VKWSI_NOISY_SWAPCHAIN_CREATION
+                vkwsi_log("      scaling_mode = {}", scaling_mode);
+#endif
             }
 
             if (scaling_mode) {
@@ -461,21 +478,21 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     }
 
 #if VKWSI_NOISY_SWAPCHAIN_CREATION
-    std::println("      final_extent = ({:5}, {:5})", extent.width, extent.height);
+    vkwsi_log("      final_extent = ({:5}, {:5})", extent.width, extent.height);
 
     if (surface_caps.maxImageCount) {
-        std::println("  caps_image_count = ({}..{})", surface_caps.minImageCount, surface_caps.maxImageCount);
+        vkwsi_log("  caps_image_count = ({}..{})", surface_caps.minImageCount, surface_caps.maxImageCount);
     } else {
-        std::println("  caps_image_count = ({}..)", surface_caps.minImageCount);
+        vkwsi_log("  caps_image_count = ({}..)", surface_caps.minImageCount);
     }
-    std::println("   min_image_count =  {}", info.min_image_count);
+    vkwsi_log("   min_image_count =  {}", info.min_image_count);
 #endif
 
     auto min_image_count = std::max(info.min_image_count, surface_caps.minImageCount);
     if (surface_caps.maxImageCount) min_image_count = std::min(min_image_count, surface_caps.maxImageCount);
 
 #if VKWSI_NOISY_SWAPCHAIN_CREATION
-    std::println(" final_image_count =  {}", min_image_count);
+    vkwsi_log(" final_image_count =  {}", min_image_count);
 #endif
 
     // TODO: There is an inherent race condition between querying surface capabilities and creating the swapchain
@@ -544,6 +561,7 @@ VkResult vkwsi_swapchain_resize(vkwsi_swapchain* swapchain, VkExtent2D extent)
 
     if (extent.width != swapchain->last_extent.width || extent.height != swapchain->last_extent.height) {
         swapchain->pending_extent = extent;
+        // TODO: Instead of marking this out-of-date, we should check surface capabilities if pending != current
         swapchain->out_of_date = true;
     }
 
@@ -614,14 +632,14 @@ VkResult vkwsi_swapchain_acquire(
                 res = vkwsi_swapchain_recreate(swapchain);
                 VKWSI_CHECK(res);
                 if (swapchain->out_of_date) {
-                    std::println("WARN: Failed to recreate swapchain due to surface capabilities race, retrying...");
+                    vkwsi_log("WARN: Failed to recreate swapchain due to surface capabilities race, retrying...");
                 }
             }
 
             res = ctx->AcquireNextImageKHR(ctx->device, swapchain->swapchain, UINT64_MAX, wait_semaphore, debug_fence, &image_idx);
             if (res == VK_ERROR_OUT_OF_DATE_KHR) {
                 swapchain->out_of_date = true;
-                std::println("WARN: Failed to acquire image due to OUT-OF-DATE condition, retrying...");
+                vkwsi_log("WARN: Failed to acquire image due to OUT-OF-DATE condition, retrying...");
                 continue;
             }
 
@@ -666,7 +684,9 @@ VkResult vkwsi_swapchain_acquire(
     auto timeline_value = ++ctx->timeline_value;
     std::vector<VkSemaphoreSubmitInfo> signals;
     signals.reserve(_signal_count + 1);
-    signals.append_range(std::span<const VkSemaphoreSubmitInfo>(_signals, _signal_count));
+    for (uint32_t i = 0; i < _signal_count; ++i) {
+        signals.emplace_back(_signals[i]);
+    }
     signals.emplace_back(VkSemaphoreSubmitInfo {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
         .semaphore = ctx->timeline,
@@ -784,7 +804,7 @@ VkResult vkwsi_swapchain_present(
 
         // TODO: This should probably just be an assert. (We should also add more asserts *everywhere*)
         if (sc.resources[sc.image_index].present_signal_fence) {
-            std::println("ERROR: Unexpected unreturned fence at index {}", sc.image_index);
+            vkwsi_log("ERROR: Unexpected unreturned fence at index {}", sc.image_index);
         }
 
         VkFence fence;
@@ -813,7 +833,7 @@ VkResult vkwsi_swapchain_present(
     for (uint32_t i = 0; i < swapchain_count; ++i) {
         auto& sc = *swapchains[i];
         if (results[i] == VK_ERROR_OUT_OF_DATE_KHR) {
-            std::println("WARN: Present returned OUT-OF-DATE, marking swapchain...");
+            vkwsi_log("WARN: Present returned OUT-OF-DATE, marking swapchain...");
             sc.out_of_date = true;
             continue;
         }

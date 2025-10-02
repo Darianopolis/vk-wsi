@@ -46,10 +46,21 @@ A handful of extensions are required, there are no optional extensions in the in
 - `VK_KHR_timeline_semaphores` or Vulkan `1.2` - `timelineSemaphore`
 - `VK_KHR_synchronization2` or Vulkan `1.3` - `synchronization2`
 
+## Platform Support
+
+Platforms that have been tested on:
+
+- Linux
+    - Arch Linux + KDE Plasma Wayland session (Wayland + X11 via XWayland)
+- Windows
+    - Windows 11
+
+Other platforms (including Apple and Android devices) may work just fine provided they have the required extensions, but have not been tested for.
+
 ## Building
 
 The library is available as a simple CMake project. Simply add and link against the `vk-wsi::vk-wsi` target (prefer the alias over the internal underlying `vk-wsi` target).
 
-You will need a C++26 capable compiler to build the library.
+You will need a C++20 capable compiler to build the library.
 
 Pass/Enable `-DVKWSI_BUILD_TESTS=ON` to build the example program (this will fetch SDL)

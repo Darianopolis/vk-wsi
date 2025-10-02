@@ -8,8 +8,13 @@
 #include <span>
 #include <unordered_map>
 
-#define VKWSI_DEBUG_LINEARIZE 0
-#define VKWSI_NOISY_SWAPCHAIN_CREATION 0
+#ifndef VKWSI_DEBUG_LINEARIZE
+# define VKWSI_DEBUG_LINEARIZE 0
+#endif
+
+#ifndef VKWSI_NOISY_SWAPCHAIN_CREATION
+# define VKWSI_NOISY_SWAPCHAIN_CREATION 0
+#endif
 
 #define VKWSI_CONCAT_INTERNAL(a, b) a##b
 #define VKWSI_CONCAT(a, b) VKWSI_CONCAT_INTERNAL(a, b)

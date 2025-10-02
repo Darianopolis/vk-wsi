@@ -2,59 +2,37 @@
 
 #include "vk-wsi.h"
 
-#define VULKAN_INSTANCE_FUNCTIONS(DO) \
-    DO(EnumeratePhysicalDevices) \
-    DO(GetPhysicalDeviceProperties2) \
-    DO(GetPhysicalDeviceQueueFamilyProperties) \
-    DO(CreateDevice) \
-    DO(GetDeviceProcAddr) \
-    DO(GetPhysicalDeviceSurfaceFormatsKHR) \
+#define VULKAN_INSTANCE_FUNCTIONS(DO)            \
+    /* Loading */                                \
+    DO(GetDeviceProcAddr)                        \
+    /* Surface capabiltliies */                  \
     DO(GetPhysicalDeviceSurfaceCapabilities2KHR) \
-    DO(DestroySurfaceKHR) \
-    DO(DestroyDevice) \
-    DO(DestroyInstance) \
-    DO(GetPhysicalDeviceSurfacePresentModesKHR)
+    DO(GetPhysicalDeviceSurfacePresentModesKHR)  \
 
 #define VULKAN_DEVICE_FUNCTIONS(DO) \
-    DO(GetDeviceQueue) \
-    DO(CreateCommandPool) \
-    DO(AllocateCommandBuffers) \
-    DO(CreateSemaphore) \
-    DO(CreatePipelineLayout) \
-    DO(CreateDescriptorPool) \
-    DO(CreateGraphicsPipelines) \
-    DO(WaitForFences) \
-    DO(ResetFences) \
-    DO(QueueWaitIdle) \
-    DO(DestroyImageView) \
-    DO(CreateSwapchainKHR) \
-    DO(DestroySwapchainKHR) \
-    DO(GetSwapchainImagesKHR) \
-    DO(CreateImageView) \
-    DO(AcquireNextImageKHR) \
-    DO(CmdPipelineBarrier2) \
-    DO(BeginCommandBuffer) \
-    DO(CmdBeginRendering) \
-    DO(CmdSetViewport) \
-    DO(CmdSetScissor) \
-    DO(CmdBindPipeline) \
-    DO(CmdDraw) \
-    DO(CmdEndRendering) \
-    DO(EndCommandBuffer) \
-    DO(QueueSubmit2) \
-    DO(QueuePresentKHR) \
-    DO(WaitSemaphores) \
-    DO(DestroyCommandPool) \
-    DO(DestroySemaphore) \
-    DO(DestroyPipelineLayout) \
-    DO(DestroyPipeline) \
-    DO(CreateFence) \
-    DO(DestroyFence) \
-    DO(DestroyDescriptorPool) \
-    DO(CmdClearColorImage) \
-    DO(ResetCommandPool) \
-    DO(GetSemaphoreCounterValue) \
-    DO(SetDebugUtilsObjectNameEXT)
+    /* Debug */                     \
+    DO(SetDebugUtilsObjectNameEXT)  \
+    /* Semaphores */                \
+    DO(CreateSemaphore)             \
+    DO(WaitSemaphores)              \
+    DO(GetSemaphoreCounterValue)    \
+    DO(DestroySemaphore)            \
+    /* Fencces */                   \
+    DO(CreateFence)                 \
+    DO(ResetFences)                 \
+    DO(WaitForFences)               \
+    DO(DestroyFence)                \
+    /* Image views */               \
+    DO(CreateImageView)             \
+    DO(DestroyImageView)            \
+    /* Swapchains */                \
+    DO(CreateSwapchainKHR)          \
+    DO(GetSwapchainImagesKHR)       \
+    DO(AcquireNextImageKHR)         \
+    DO(DestroySwapchainKHR)         \
+    /* Queue operations */          \
+    DO(QueuePresentKHR)             \
+    DO(QueueSubmit2)                \
 
 #define VULKAN_DECLARE_FUNCTION(      funcName, ...) PFN_vk##funcName funcName;
 #define VULKAN_LOAD_INSTANCE_FUNCTION(funcName, ...) functions->funcName = (PFN_vk##funcName)functions->GetInstanceProcAddr(instance, "vk"#funcName);
