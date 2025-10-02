@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vk-wsi.hpp"
+#include "vk-wsi.h"
 #include "vk-wsi-functions.hpp"
 
 #include <deque>
@@ -10,6 +10,21 @@
 
 #define VKWSI_DEBUG_LINEARIZE 0
 #define VKWSI_NOISY_SWAPCHAIN_CREATION 0
+
+#define VKWSI_CONCAT_INTERNAL(a, b) a##b
+#define VKWSI_CONCAT(a, b) VKWSI_CONCAT_INTERNAL(a, b)
+#define VKWSI_UNQIUE_VAR() VKWSI_CONCAT(vkwsi_var_, __COUNTER__)
+
+template<typename fn_t>
+struct vkwsi_defer_guard
+{
+    fn_t fn;
+
+    vkwsi_defer_guard(fn_t&& fn): fn(std::move(fn)) {}
+    ~vkwsi_defer_guard() { fn(); };
+};
+
+#define defer vkwsi_defer_guard VKWSI_UNQIUE_VAR() = [&]
 
 // TODO: Implement logging callbacks?
 

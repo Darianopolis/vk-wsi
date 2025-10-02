@@ -1,4 +1,4 @@
-#include "vk-wsi.hpp"
+#include "vk-wsi.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -348,12 +348,12 @@ int main()
     // Initialize vk-wsi
 
     vkwsi_context* context;
-    vk_check(vkwsi_context_create(&context, {
+    vk_check(vkwsi_context_create(&context, ptr_to(vkwsi_context_info {
         .instance = instance,
         .device = device,
         .physical_device = physical_device,
         .get_instance_proc_addr = vkGetInstanceProcAddr,
-    }));
+    })));
     defer { vkwsi_context_destroy(context); };
 
     // Create window and surface
@@ -406,22 +406,24 @@ int main()
             }
         }
 
-        vkwsi_swapchain_info sw_info = {};
+        vkwsi_swapchain_info sw_info = vkwsi_swapchain_info_default();
         sw_info.image_sharing_mode = VK_SHARING_MODE_EXCLUSIVE;
-        sw_info.queue_families = { queue_family };
+        sw_info.queue_families = &queue_family;
+        sw_info.queue_family_count = 1;
         sw_info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-        // TODO: Test runtime parameters
+        std::array present_modes { VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR };
+        sw_info.present_mode = vkwsi_context_pick_present_mode(context, wd.surface, present_modes.data(), present_modes.size());
 
-        // sw_info.min_image_count = 2;
-        // sw_info.present_mode = VK_PRESENT_MODE_FIFO_KHR;
-
-        sw_info.min_image_count = 4;
-        sw_info.present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+        switch (sw_info.present_mode) {
+            break;case VK_PRESENT_MODE_MAILBOX_KHR: sw_info.min_image_count = 4;
+            break;case VK_PRESENT_MODE_FIFO_KHR:    sw_info.min_image_count = 2;
+            break;default:                          ;
+        }
 
         sw_info.format = surface_format.format;
         sw_info.color_space = surface_format.colorSpace;
-        vkwsi_swapchain_set_info(wd.swapchain, std::move(sw_info));
+        vkwsi_swapchain_set_info(wd.swapchain, &sw_info);
     }
 
     auto last_report = std::chrono::steady_clock::now();
@@ -488,7 +490,7 @@ int main()
 
         std::vector<vkwsi_swapchain*> swapchains;
         for (auto& wd : windows) swapchains.emplace_back(wd.swapchain);
-        vk_check(vkwsi_swapchain_acquire(swapchains, queue, {image_ready}));
+        vk_check(vkwsi_swapchain_acquire(swapchains.data(), swapchains.size(), queue, &image_ready, 1));
 
 #if VKWSI_TEST_FORCE_LINEARIZATION
         wait_semaphore(semaphore, image_ready.value);
@@ -583,7 +585,7 @@ int main()
 
         frame.timeline_value = render_complete.value;
 
-        vkwsi_swapchain_present(swapchains, queue, { render_complete }, false);
+        vkwsi_swapchain_present(swapchains.data(), swapchains.size(), queue, &render_complete, 1, false);
     }
 main_loop:
 }

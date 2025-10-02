@@ -54,25 +54,47 @@ VkResult vkwsi_h_wait_and_reset_fence(vkwsi_context* ctx, VkFence fence)
 
 // -----------------------------------------------------------------------------
 
+vkwsi_swapchain_info vkwsi_swapchain_info_default()
+{
+    return {
+        .min_image_count = 1,
+
+        .format = {},
+        .color_space = {},
+
+        .image_array_layers = 1,
+        .image_usage = {},
+
+        .image_sharing_mode = VK_SHARING_MODE_EXCLUSIVE,
+        .queue_families = {},
+        .queue_family_count = {},
+
+        .pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+        .composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+
+        .present_mode = VK_PRESENT_MODE_FIFO_KHR,
+    };
+}
+
 static
 VkResult vkwsi_recover_binary_semaphores(vkwsi_context* ctx);
 
-VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info& info)
+VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info* info)
 {
     VkResult res;
 
     auto ctx = new vkwsi_context {};
     // TODO: Cleanup on error
 
-    if (!info.instance || !info.device || !info.physical_device) {
+    if (!info->instance || !info->device || !info->physical_device) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
 
-    ctx->instance = info.instance;
-    ctx->device = info.device;
-    ctx->physical_device = info.physical_device;
+    ctx->instance = info->instance;
+    ctx->device = info->device;
+    ctx->physical_device = info->physical_device;
 
-    vkwsi_init_functions(ctx, info.instance, info.device, info.get_instance_proc_addr);
+    vkwsi_init_functions(ctx, info->instance, info->device, info->get_instance_proc_addr);
     // TODO: Check that required functions have loaded
 
 #if VKWSI_DEBUG_LINEARIZE
@@ -116,6 +138,46 @@ void vkwsi_context_destroy(vkwsi_context* ctx)
     ctx->DestroySemaphore(ctx->device, ctx->timeline, ctx->alloc);
 
     delete ctx;
+}
+
+VkPresentModeKHR vkwsi_context_pick_present_mode(vkwsi_context* ctx, VkSurfaceKHR surface, const VkPresentModeKHR* present_modes, uint32_t present_mode_count)
+{
+    VkResult res;
+
+    auto present_mode_to_string = [](VkPresentModeKHR pm) {
+        switch (pm) {
+            case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+            case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+            case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
+            case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
+            case VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR: return "SHARED_DEMAND_REFRESH";
+            case VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR: return "SHARED_CONTINUOUS_REFRESH";
+            case VK_PRESENT_MODE_FIFO_LATEST_READY_KHR: return "FIFO_LATEST_READY";
+            default: return "?";
+        }
+    };
+
+    std::vector<VkPresentModeKHR> available_present_modes;
+    res = vkwsi_enumerate(available_present_modes, ctx->GetPhysicalDeviceSurfacePresentModesKHR, ctx->physical_device, surface);
+    std::println("AVAILABLE PRESENT MODES:");
+    for (auto pm : available_present_modes) {
+        std::println(" - {}", present_mode_to_string(pm));
+    }
+
+    for (uint32_t i = 0; i < present_mode_count; ++i) {
+        auto pm = present_modes[i];
+        std::println("CHECKING PRESENT MODE: {}", present_mode_to_string(pm));
+        auto begin = available_present_modes.begin();
+        auto end = available_present_modes.end();
+        if (std::find(begin, end, pm) != end) {
+            std::println("  AVAILABLE!");
+            return pm;
+        }
+    }
+
+    std::println("FALLING BACK TO FIFO PRESENT MODE");
+
+    return VK_PRESENT_MODE_FIFO_KHR;
 }
 
 static
@@ -286,9 +348,9 @@ VkResult vkwsi_swapchain_create(vkwsi_swapchain** pp_swapchain, vkwsi_context* c
     return VK_SUCCESS;
 }
 
-void vkwsi_swapchain_set_info(vkwsi_swapchain* swapchain, vkwsi_swapchain_info info)
+void vkwsi_swapchain_set_info(vkwsi_swapchain* swapchain, const vkwsi_swapchain_info* info)
 {
-    swapchain->pending_info = std::move(info);
+    swapchain->pending_info = *info;
     swapchain->out_of_date = true;
 }
 
@@ -380,15 +442,15 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
         // .flags = VK_SWAPCHAIN_CREATE_DEFERRED_MEMORY_ALLOCATION_BIT_KHR,
         .surface               = swapchain->surface,
-        .minImageCount         = info.min_image_count,
+        .minImageCount         = min_image_count,
         .imageFormat           = info.format,
         .imageColorSpace       = info.color_space,
         .imageExtent           = extent,
         .imageArrayLayers      = info.image_array_layers,
         .imageUsage            = info.image_usage,
         .imageSharingMode      = info.image_sharing_mode,
-        .queueFamilyIndexCount = uint32_t(info.queue_families.size()),
-        .pQueueFamilyIndices   = info.queue_families.data(),
+        .queueFamilyIndexCount = info.queue_family_count,
+        .pQueueFamilyIndices   = info.queue_families,
         .preTransform          = info.pre_transform,
         .compositeAlpha        = info.composite_alpha,
         .presentMode           = info.present_mode,
@@ -430,15 +492,18 @@ VkResult vkwsi_swapchain_resize(vkwsi_swapchain* swapchain, VkExtent2D extent)
     return VK_SUCCESS;
 }
 
-VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue adapter_queue, std::span<const VkSemaphoreSubmitInfo> _signals)
+VkResult vkwsi_swapchain_acquire(
+    vkwsi_swapchain* const* swapchains, uint32_t swapchain_count,
+    VkQueue adapter_queue,
+    const VkSemaphoreSubmitInfo* _signals, uint32_t _signal_count)
 {
     // NOTE: `adapter_queue` technically must be the same for all acquires. As signal operation ordering
     //       guarantees are relied on for timeline correctness in the (pathological) case that separate
     //       acquire calls complete out of orders
 
-    if (swapchains.empty()) return VK_SUCCESS;
+    if (swapchain_count == 0) return VK_SUCCESS;
 
-    auto ctx = swapchains.front()->ctx;
+    auto ctx = swapchains[0]->ctx;
     VkResult res;
 
 #if VKWSI_DEBUG_LINEARIZE
@@ -452,8 +517,8 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
     //       `vkwsi_on_swapchain_present_complete`, however this would force worst-case semaphore reuse.
     vkwsi_recover_binary_semaphores(ctx);
 
-    std::vector<VkSemaphoreSubmitInfo> wait_infos(swapchains.size());
-    for (uint32_t i = 0; i < swapchains.size(); ++i) {
+    std::vector<VkSemaphoreSubmitInfo> wait_infos(swapchain_count);
+    for (uint32_t i = 0; i < swapchain_count; ++i) {
         auto swapchain = swapchains[i];
 
         // TODO: How do we recover from errors that occur after we have successfully acquired from *some* swapchains
@@ -519,8 +584,8 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
     // NOTE: We inject out own timeline semaphore to know when we can recover the allocated binary semaphores
     auto timeline_value = ++ctx->timeline_value;
     std::vector<VkSemaphoreSubmitInfo> signals;
-    signals.reserve(_signals.size() + 1);
-    signals.append_range(_signals);
+    signals.reserve(_signal_count + 1);
+    signals.append_range(std::span<const VkSemaphoreSubmitInfo>(_signals, _signal_count));
     signals.emplace_back(VkSemaphoreSubmitInfo {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
         .semaphore = ctx->timeline,
@@ -530,7 +595,7 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
     {
         res = ctx->QueueSubmit2(adapter_queue, 1, vkwsi_temp(VkSubmitInfo2 {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .waitSemaphoreInfoCount = uint32_t(swapchains.size()),
+            .waitSemaphoreInfoCount = swapchain_count,
             .pWaitSemaphoreInfos = wait_infos.data(),
             .signalSemaphoreInfoCount = uint32_t(signals.size()),
             .pSignalSemaphoreInfos = signals.data(),
@@ -544,8 +609,8 @@ VkResult vkwsi_swapchain_acquire(std::span<vkwsi_swapchain*> swapchains, VkQueue
 
         auto& resources = ctx->acquire_resource_release_queue.emplace_back();
         resources.timeline_value = timeline_value;
-        resources.semaphores.resize(swapchains.size());
-        for (uint32_t i = 0; i < swapchains.size(); ++i) {
+        resources.semaphores.resize(swapchain_count);
+        for (uint32_t i = 0; i < swapchain_count; ++i) {
             resources.semaphores[i] = wait_infos[i].semaphore;
         }
     }
@@ -564,11 +629,14 @@ vkwsi_swapchain_image vkwsi_swapchain_get_current(vkwsi_swapchain* swapchain)
     };
 }
 
-VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue queue, std::span<const VkSemaphoreSubmitInfo> waits, bool host_wait)
+VkResult vkwsi_swapchain_present(
+    vkwsi_swapchain* const* swapchains, uint32_t swapchain_count,
+    VkQueue queue,
+    const VkSemaphoreSubmitInfo* waits, uint32_t wait_count, bool host_wait)
 {
-    if (swapchains.empty()) return VK_SUCCESS;
+    if (swapchain_count == 0) return VK_SUCCESS;
 
-    auto ctx = swapchains.front()->ctx;
+    auto ctx = swapchains[0]->ctx;
     VkResult res;
 
     VkSemaphore binary_sema = nullptr;
@@ -579,18 +647,18 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
         VkFence debug_fence = nullptr;
 #endif
 
-    if (!waits.empty()) {
+    if (wait_count > 0) {
         if (host_wait) {
             std::vector<VkSemaphore> semaphores;
             std::vector<uint64_t> values;
-            for (uint32_t i = 0; i < waits.size(); ++i) {
+            for (uint32_t i = 0; i < wait_count; ++i) {
                 semaphores[i] = waits[i].semaphore;
                 values[i] = waits[i].value;
             }
 
             res = ctx->WaitSemaphores(ctx->device, vkwsi_temp(VkSemaphoreWaitInfo {
                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                .semaphoreCount = uint32_t(waits.size()),
+                .semaphoreCount = uint32_t(wait_count),
                 .pSemaphores = semaphores.data(),
                 .pValues = values.data(),
             }), UINT64_MAX);
@@ -600,8 +668,8 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
 
             res = ctx->QueueSubmit2(queue, 1, vkwsi_temp(VkSubmitInfo2 {
                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-                .waitSemaphoreInfoCount = uint32_t(waits.size()),
-                .pWaitSemaphoreInfos = waits.data(),
+                .waitSemaphoreInfoCount = wait_count,
+                .pWaitSemaphoreInfos = waits,
                 .signalSemaphoreInfoCount = 1,
                 .pSignalSemaphoreInfos = vkwsi_temp(VkSemaphoreSubmitInfo {
                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -617,11 +685,11 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
         }
     }
 
-    std::vector<VkSwapchainKHR> vk_swapchains(swapchains.size());
-    std::vector<uint32_t>             indices(swapchains.size());
-    std::vector<VkFence>       present_fences(swapchains.size());
-    std::vector<VkResult>             results(swapchains.size());
-    for (uint32_t i = 0; i < swapchains.size(); ++i) {
+    std::vector<VkSwapchainKHR> vk_swapchains(swapchain_count);
+    std::vector<uint32_t>             indices(swapchain_count);
+    std::vector<VkFence>       present_fences(swapchain_count);
+    std::vector<VkResult>             results(swapchain_count);
+    for (uint32_t i = 0; i < swapchain_count; ++i) {
         auto& sc = *swapchains[i];
         vk_swapchains[i] = sc.swapchain;
         indices[i] = sc.image_index;
@@ -643,19 +711,19 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .pNext = vkwsi_temp(VkSwapchainPresentFenceInfoKHR {
             .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_FENCE_INFO_KHR,
-            .swapchainCount = uint32_t(swapchains.size()),
+            .swapchainCount = swapchain_count,
             .pFences = present_fences.data(),
         }),
         .waitSemaphoreCount = binary_sema ? 1u : 0u,
         .pWaitSemaphores = &binary_sema,
-        .swapchainCount = uint32_t(swapchains.size()),
+        .swapchainCount = swapchain_count,
         .pSwapchains = vk_swapchains.data(),
         .pImageIndices = indices.data(),
         .pResults = results.data(),
     }));
 
     uint32_t successful_presents = 0;
-    for (uint32_t i = 0; i < swapchains.size(); ++i) {
+    for (uint32_t i = 0; i < swapchain_count; ++i) {
         if (results[i] == VK_ERROR_OUT_OF_DATE_KHR) {
             swapchains[i]->out_of_date = true;
             continue;
@@ -671,7 +739,8 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
 
     if (binary_sema) {
         ctx->present_semaphore_release_map[binary_sema] = successful_presents;
-        for (auto& swapchain : swapchains) {
+        for (uint32_t i = 0; i < swapchain_count; ++i) {
+            auto* swapchain = swapchains[i];
             if (!swapchain->out_of_date) {
                 swapchain->resources[swapchain->image_index].last_present_wait_semaphore = binary_sema;
             }
@@ -679,7 +748,7 @@ VkResult vkwsi_swapchain_present(std::span<vkwsi_swapchain*> swapchains, VkQueue
     }
 
 #if VKWSI_DEBUG_LINEARIZE
-    for (uint32_t i = 0; i < swapchains.size(); ++i) {
+    for (uint32_t i = 0; i < swapchain_count; ++i) {
         res = vkwsi_wait_for_present_complete(swapchains[i], swapchains[i]->image_index);
         VKWSI_CHECK(res);
     }

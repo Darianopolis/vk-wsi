@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vk-wsi.hpp"
+#include "vk-wsi.h"
 
 #define VULKAN_INSTANCE_FUNCTIONS(DO) \
     DO(EnumeratePhysicalDevices) \
@@ -12,7 +12,8 @@
     DO(GetPhysicalDeviceSurfaceCapabilities2KHR) \
     DO(DestroySurfaceKHR) \
     DO(DestroyDevice) \
-    DO(DestroyInstance)
+    DO(DestroyInstance) \
+    DO(GetPhysicalDeviceSurfacePresentModesKHR)
 
 #define VULKAN_DEVICE_FUNCTIONS(DO) \
     DO(GetDeviceQueue) \
