@@ -9,14 +9,13 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
+#include <cmath>
 
 using namespace std::literals;
 
 // -----------------------------------------------------------------------------
 
-// Force host waits after acquire and rendering work
-#define VKWSI_TEST_FORCE_LINEARIZATION 0
-
+#define VKWSI_TEST_FORCE_LINEARIZATION 1
 #define VKWSI_TEST_REPORT_METRICS 1
 
 // -----------------------------------------------------------------------------
@@ -109,8 +108,9 @@ int main()
 {
     // Options
 
-    static constexpr uint32_t num_windows = 1;
+    static constexpr uint32_t num_windows = 3;
     static constexpr uint32_t frames_in_flight = 3;
+    static constexpr VkExtent2D initial_window_size = { 800, 600 };
 
 // -----------------------------------------------------------------------------
 
@@ -290,6 +290,22 @@ int main()
     }), nullptr, &cmd_pool));
     defer { vkDestroyCommandPool(device, cmd_pool, nullptr); };
 
+    // Animated color value to show render progress
+
+    auto time_start = std::chrono::steady_clock::now();
+    auto get_clear_color = [&] {
+
+        static constexpr auto period_ms = 4000;
+        static constexpr float amplitude = 0.5f;
+
+        auto now = std::chrono::steady_clock::now();
+        auto delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - time_start).count();
+        auto normalized_ms = (delta_ms - period_ms * (delta_ms / period_ms));
+        auto normalized_s = float(normalized_ms) / period_ms;
+        auto wave = std::sin(normalized_s * std::numbers::pi_v<float>) * amplitude;
+        return VkClearColorValue{.float32{0.3f, 0.3f, wave, 1.f}};
+    };
+
     uint64_t frame = 0;
 
     struct frame_resources
@@ -339,7 +355,10 @@ int main()
 
         // Create window
 
-        wd.window = SDL_CreateWindow(std::format("vk-wsi-{}", i + 1).c_str(), 800, 600, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        wd.window = SDL_CreateWindow(
+            std::format("vk-wsi-{}", i + 1).c_str(),
+            initial_window_size.width, initial_window_size.height,
+            SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
 
         if (!SDL_Vulkan_CreateSurface(wd.window, instance, nullptr, &wd.surface)) {
             error(std::source_location::current(), "Failed to create SDL Vulkan surface: {}", SDL_GetError());
@@ -409,6 +428,8 @@ int main()
         // This is only used to guard the command buffer in practice
         // We could also simply allocate a transient command buffer each frame
 
+        log("#### waiting for fif to be ready");
+
         wait_semaphore(semaphore, frame.timeline_value);
 
 #if VKWSI_TEST_REPORT_METRICS
@@ -470,11 +491,14 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
+        log("#### acquiring");
+
         std::vector<vkwsi_swapchain*> swapchains;
         for (auto& wd : windows) swapchains.emplace_back(wd->swapchain);
         vk_check(vkwsi_swapchain_acquire(swapchains.data(), swapchains.size(), queue, &image_ready, 1));
 
 #if VKWSI_TEST_FORCE_LINEARIZATION
+        log("#### waiting for acquisition");
         wait_semaphore(semaphore, image_ready.value);
 #endif
 
@@ -527,7 +551,7 @@ int main()
 
             vkCmdClearColorImage(cmd, image,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                ptr_to(VkClearColorValue{.float32{0.2f, 0.2f, 0.2f, 1.f}}),
+                ptr_to(get_clear_color()),
                 1, ptr_to(VkImageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }));
 
             // transition(cmd, image,
@@ -552,6 +576,8 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
+        log("#### submitting");
+
         vk_check(vkQueueSubmit2(queue, 1, ptr_to(VkSubmitInfo2 {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
             .waitSemaphoreInfoCount = 1,
@@ -566,6 +592,7 @@ int main()
         }), nullptr));
 
 #if VKWSI_TEST_FORCE_LINEARIZATION
+        log("#### waiting for submission to complete");
         wait_semaphore(semaphore, render_complete.value);
 #endif
 
@@ -573,7 +600,9 @@ int main()
 
         // Present to swapchains
 
+        log("#### presenting");
         vkwsi_swapchain_present(swapchains.data(), swapchains.size(), queue, &render_complete, 1, false);
+        log("#### waiting for presentation to complete");
 
         return true;
     };
@@ -590,28 +619,29 @@ int main()
     // NOTE: Window size events need to be handled from an event watched as the main event loop
     //       isn't running during resize operations on Windows due to modal resizing.
 
-    auto sdl_event_listener = [&](SDL_Event* event) {
-        if (SDL_IsMainThread()) {
-            if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-                auto w = event->window.data1;
-                auto h = event->window.data2;
-                std::scoped_lock m{ windows_mutex };
-                for (auto& wd : windows) {
-                    if (SDL_GetWindowID(wd->window) == event->window.windowID) {
-                        // log("Window {} resized ({}, {})", (void*)wd->window, w, h);
-                        wd->extent = { uint32_t(w), uint32_t(h) };
-                        break;
-                    }
+    auto event_watch = [&](SDL_Event* event) {
+        if (!SDL_IsMainThread()) {
+            log("WARN: Event Listener called from other thread!");
+            return;
+        }
+
+        if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+            auto w = event->window.data1;
+            auto h = event->window.data2;
+            std::scoped_lock m{ windows_mutex };
+            for (auto& wd : windows) {
+                if (SDL_GetWindowID(wd->window) == event->window.windowID) {
+                    // log("Window {} resized ({}, {})", (void*)wd->window, w, h);
+                    wd->extent = { uint32_t(w), uint32_t(h) };
+                    break;
                 }
             }
-        } else {
-            log("WARN: Event Listener called from other thread!");
         }
     };
     SDL_AddEventWatch([](void *userdata, SDL_Event *event) -> bool {
-        (*(decltype(sdl_event_listener)*)userdata)(event);
+        (*(decltype(event_watch)*)userdata)(event);
         return true;
-    }, &sdl_event_listener);
+    }, &event_watch);
 
     // Main thread event loop
 

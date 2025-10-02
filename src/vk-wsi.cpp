@@ -650,7 +650,9 @@ VkResult vkwsi_swapchain_acquire(
             VKWSI_CHECK(res);
         }
 #if VKWSI_DEBUG_LINEARIZE
+        vkwsi_log("#### vkwsi - waiting for acquire debug fence to complete");
         res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
+        vkwsi_log("#### vkwsi - done");
         VKWSI_CHECK(res);
 #endif
         swapchain->image_index = image_idx;
@@ -663,7 +665,9 @@ VkResult vkwsi_swapchain_acquire(
         //       around it anyway. Ideally we could just:
         //
         //       vkwsi_on_swapchain_present_complete(swapchain, image_idx)
+        vkwsi_log("#### vkwsi - waiting for previous presentation to complete");
         res = vkwsi_wait_for_present_complete(swapchain, image_idx);
+        vkwsi_log("#### vkwsi - done");
         VKWSI_CHECK(res);
 
         if (!swapchain->resources[image_idx].view) {
@@ -679,6 +683,43 @@ VkResult vkwsi_swapchain_acquire(
             VKWSI_CHECK(res);
         }
     }
+
+    // {
+    //     for (uint32_t i = 0; i < swapchain_count; ++i) {
+    //         // NOTE: We inject out own timeline semaphore to know when we can recover the allocated binary semaphores
+    //         auto timeline_value = ++ctx->timeline_value;
+
+    //         {
+    //             res = ctx->QueueSubmit2(adapter_queue, 1, vkwsi_temp(VkSubmitInfo2 {
+    //                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+    //                 .waitSemaphoreInfoCount = 1,
+    //                 .pWaitSemaphoreInfos = &wait_infos[i],
+    //                 .signalSemaphoreInfoCount = 1,
+    //                 .pSignalSemaphoreInfos = vkwsi_temp(VkSemaphoreSubmitInfo {
+    //                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+    //                     .semaphore = ctx->timeline,
+    //                     .value = timeline_value,
+    //                 }),
+    //             }), debug_fence);
+    //             VKWSI_CHECK(res);
+
+    //     #if VKWSI_DEBUG_LINEARIZE
+    //             vkwsi_log("#### vkwsi - waiting for adapter submission[{}] to complete", i);
+    //             res = ctx->WaitSemaphores(ctx->device, vkwsi_temp(VkSemaphoreWaitInfo {
+    //                 .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+    //                 .semaphoreCount = 1,
+    //                 .pSemaphores = &ctx->timeline,
+    //                 .pValues = &timeline_value,
+    //             }), UINT64_MAX);
+    //             vkwsi_log("#### vkwsi - done");
+    //             VKWSI_CHECK(res);
+    //             res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
+    //             VKWSI_CHECK(res);
+    //     #endif
+    //         }
+    //     }
+
+    // }
 
     // NOTE: We inject out own timeline semaphore to know when we can recover the allocated binary semaphores
     auto timeline_value = ++ctx->timeline_value;
@@ -704,7 +745,9 @@ VkResult vkwsi_swapchain_acquire(
         VKWSI_CHECK(res);
 
 #if VKWSI_DEBUG_LINEARIZE
+        vkwsi_log("#### vkwsi - waiting for adapter submission to complete");
         res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
+        vkwsi_log("#### vkwsi - done");
         VKWSI_CHECK(res);
 #endif
 
