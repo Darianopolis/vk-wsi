@@ -29,6 +29,9 @@ Windowing System Integration (WSI) is notoriously finnicky to get right. There i
 And on Linux you also have a huge variety of compositors with varying capabilities and interactions with clients.
 - Compositors: KDE Plasma, GNOME, Hyprland, Sway, Niri, etc...
 
+And all of these interact slightly differently, usage of the API that works on a dev work system may resulting in completely broken
+behaviour elsewhere.
+
 ## Vulkan Extensions
 
 A handful of extensions are required, there are no optional extensions in the interest of keeping a focus on the core functionality of the library. All these extensions should be widely available on any actively supported hardware, and there are no particular hardware requirements.
@@ -36,7 +39,6 @@ A handful of extensions are required, there are no optional extensions in the in
 #### Instance
 
 - `VK_KHR_get_surface_capabilities2`
-- `VK_EXT_SURFACE_MAINTENANCE`
 - `VK_EXT_surface_maintenance1`
 
 #### Device

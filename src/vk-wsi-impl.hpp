@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 #ifndef VKWSI_DEBUG_LINEARIZE
-# define VKWSI_DEBUG_LINEARIZE 1
+# define VKWSI_DEBUG_LINEARIZE 0
 #endif
 
 #ifndef VKWSI_NOISY_SWAPCHAIN_CREATION

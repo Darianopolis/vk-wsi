@@ -15,7 +15,7 @@ using namespace std::literals;
 
 // -----------------------------------------------------------------------------
 
-#define VKWSI_TEST_FORCE_LINEARIZATION 1
+#define VKWSI_TEST_FORCE_LINEARIZATION 0
 #define VKWSI_TEST_REPORT_METRICS 1
 
 // -----------------------------------------------------------------------------
@@ -108,7 +108,7 @@ int main()
 {
     // Options
 
-    static constexpr uint32_t num_windows = 3;
+    static constexpr uint32_t num_windows = 1;
     static constexpr uint32_t frames_in_flight = 3;
     static constexpr VkExtent2D initial_window_size = { 800, 600 };
 
@@ -387,7 +387,10 @@ int main()
         sw_info.queue_family_count = 1;
         sw_info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-        VkPresentModeKHR present_modes[] { VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR };
+        VkPresentModeKHR present_modes[] {
+            VK_PRESENT_MODE_MAILBOX_KHR,
+            VK_PRESENT_MODE_FIFO_KHR
+        };
         sw_info.present_mode = vkwsi_context_pick_present_mode(context, wd.surface, present_modes, std::size(present_modes));
 
         switch (sw_info.present_mode) {
@@ -427,8 +430,6 @@ int main()
         // Wait for previous frame in flight to complete
         // This is only used to guard the command buffer in practice
         // We could also simply allocate a transient command buffer each frame
-
-        log("#### waiting for fif to be ready");
 
         wait_semaphore(semaphore, frame.timeline_value);
 
@@ -491,14 +492,11 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
-        log("#### acquiring");
-
         std::vector<vkwsi_swapchain*> swapchains;
         for (auto& wd : windows) swapchains.emplace_back(wd->swapchain);
         vk_check(vkwsi_swapchain_acquire(swapchains.data(), swapchains.size(), queue, &image_ready, 1));
 
 #if VKWSI_TEST_FORCE_LINEARIZATION
-        log("#### waiting for acquisition");
         wait_semaphore(semaphore, image_ready.value);
 #endif
 
@@ -511,6 +509,9 @@ int main()
         for (auto& wd : windows) {
             auto current = vkwsi_swapchain_get_current(wd->swapchain);
             auto image = current.image;
+
+            // NOTE: This forms a closed-loop system that corrects known extent to the achieved extent.
+            wd->extent.store(current.extent);
 
             auto transition = [&](VkCommandBuffer cmd, VkImage image,
                 VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
@@ -576,8 +577,6 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
-        log("#### submitting");
-
         vk_check(vkQueueSubmit2(queue, 1, ptr_to(VkSubmitInfo2 {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
             .waitSemaphoreInfoCount = 1,
@@ -592,7 +591,6 @@ int main()
         }), nullptr));
 
 #if VKWSI_TEST_FORCE_LINEARIZATION
-        log("#### waiting for submission to complete");
         wait_semaphore(semaphore, render_complete.value);
 #endif
 
@@ -600,9 +598,7 @@ int main()
 
         // Present to swapchains
 
-        log("#### presenting");
         vkwsi_swapchain_present(swapchains.data(), swapchains.size(), queue, &render_complete, 1, false);
-        log("#### waiting for presentation to complete");
 
         return true;
     };
@@ -631,7 +627,7 @@ int main()
             std::scoped_lock m{ windows_mutex };
             for (auto& wd : windows) {
                 if (SDL_GetWindowID(wd->window) == event->window.windowID) {
-                    // log("Window {} resized ({}, {})", (void*)wd->window, w, h);
+                    log("Window {} resized ({}, {}) (id = {})", (void*)wd->window, w, h, event->window.windowID);
                     wd->extent = { uint32_t(w), uint32_t(h) };
                     break;
                 }
@@ -654,9 +650,8 @@ int main()
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             std::scoped_lock m{ windows_mutex };
             for (auto& wd : windows) {
-                auto id = SDL_GetWindowID(wd->window);
-                if (id == event.window.windowID) {
-                    log("Window {} close requested (id = {})", (void*)wd->window, id);
+                if (SDL_GetWindowID(wd->window) == event.window.windowID) {
+                    log("Window {} close requested (id = {})", (void*)wd->window, event.window.windowID);
                     wd->close_requested = true;
                     break;
                 }
