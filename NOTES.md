@@ -24,8 +24,10 @@ Compositors:
 2) Attempt to interactively resize in Niri
 3) Niri will throttle resizes as it does not detect previous resizes as being handled
 
-Notably, this is not observed when using a minimal raw libwayland test case, only when running through SDL3.
-(other windowing libraries have not been tested, it's possible this is a driver/compositor bug that SDL has merely uncovered)
+Note:
+
+- Does not occur when using raw libwayland calls or GLFW
+- It's still possible this is a driver/compositor bug that SDL has merely uncovered.
 
 ## Niri/SDL3/X11 incorrect initial size bug
 

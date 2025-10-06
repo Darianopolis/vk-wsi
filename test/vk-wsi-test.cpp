@@ -1,7 +1,16 @@
 #include "vk-wsi.h"
 
+#define VKWSI_TEST_USE_SDL 0
+#define VKWSI_TEST_USE_GLFW 1
+
+#if VKWSI_TEST_USE_SDL
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
+#endif
+
+#if VKWSI_TEST_USE_GLFW
+#include <GLFW/glfw3.h>
+#endif
 
 #include <format>
 #include <iostream>
@@ -140,18 +149,28 @@ int main()
 {
     // Options
 
-    static constexpr uint32_t num_windows = 1;
+    static constexpr uint32_t num_windows = 3;
     static constexpr uint32_t frames_in_flight = 3;
     static constexpr VkExtent2D initial_window_size = { 800, 600 };
 
 // -----------------------------------------------------------------------------
 
+#if VKWSI_TEST_USE_SDL
     SDL_Init(SDL_INIT_VIDEO);
     defer {
         SDL_Quit();
     };
     SDL_Vulkan_LoadLibrary(nullptr);
     auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+#endif
+#if VKWSI_TEST_USE_GLFW
+    glfwInit();
+    defer {
+        glfwTerminate();
+    };
+    glfwInitVulkanLoader(nullptr);
+    auto vkGetInstanceProcAddr = &glfwGetInstanceProcAddress;
+#endif
 
     log_info("vkGetInstanceProcAddr: {}", (void*)vkGetInstanceProcAddr);
     if (!vkGetInstanceProcAddr) {
@@ -165,7 +184,12 @@ int main()
     };
     {
         uint32_t instance_extension_count;
+#if VKWSI_TEST_USE_SDL
         auto* list = SDL_Vulkan_GetInstanceExtensions(&instance_extension_count);
+#endif
+#if VKWSI_TEST_USE_GLFW
+        auto* list = glfwGetRequiredInstanceExtensions(&instance_extension_count);
+#endif
         for (uint32_t i = 0; i < instance_extension_count; ++i) {
             instance_extensions.emplace_back(list[i]);
         }
@@ -382,11 +406,17 @@ int main()
 
     struct window_data
     {
+#if VKWSI_TEST_USE_SDL
         SDL_Window* window;
+#endif
+#if VKWSI_TEST_USE_GLFW
+        GLFWwindow* window;
+#endif
         VkSurfaceKHR surface;
         vkwsi_swapchain* swapchain;
         bool close_requested = false;
         std::atomic<VkExtent2D> extent;
+        VkExtent2D last_requested_extent;
     };
 
     std::mutex windows_mutex;
@@ -397,14 +427,25 @@ int main()
 
         // Create window
 
+        auto title = std::format("vk-wsi-{}", i + 1);
+
+#if VKWSI_TEST_USE_SDL
         wd.window = SDL_CreateWindow(
-            std::format("vk-wsi-{}", i + 1).c_str(),
+            title.c_str(),
             initial_window_size.width, initial_window_size.height,
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
 
         if (!SDL_Vulkan_CreateSurface(wd.window, instance, nullptr, &wd.surface)) {
             error(std::source_location::current(), "Failed to create SDL Vulkan surface: {}", SDL_GetError());
         }
+#endif
+#if VKWSI_TEST_USE_GLFW
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        glfwWindowHint(GLFW_RESIZABLE, true);
+        wd.window = glfwCreateWindow(initial_window_size.width, initial_window_size.height, title.c_str(), nullptr, nullptr);
+
+        vk_check(glfwCreateWindowSurface(instance, wd.window, nullptr, &wd.surface));
+#endif
 
         vk_check(vkwsi_swapchain_create(&wd.swapchain, context, wd.surface));
 
@@ -449,7 +490,12 @@ int main()
 
         {
             int w, h;
+#if VKWSI_TEST_USE_SDL
             SDL_GetWindowSizeInPixels(wd.window, &w, &h);
+#endif
+#if VKWSI_TEST_USE_GLFW
+            glfwGetFramebufferSize(wd.window, &w, &h);
+#endif
             VkExtent2D extent { uint32_t(w), uint32_t(h) };
             wd.extent = extent;
 
@@ -466,7 +512,13 @@ int main()
     uint32_t fps = 0;
 #endif
 
+#if VKWSI_TEST_USE_SDL
     auto sdl_recheck_size_event = SDL_RegisterEvents(1);
+#endif
+
+#if VKWSI_TEST_USE_GLFW
+    std::vector<GLFWwindow*> glfw_window_close_list;
+#endif
 
     auto render = [&]() -> bool {
         auto fif = (frame++) % frames_in_flight;
@@ -497,7 +549,8 @@ int main()
         //       we do not invalidate iterators or attempt to read `close_requested`
 
         for (auto& wd : windows) {
-            vk_check(vkwsi_swapchain_resize(wd->swapchain, wd->extent));
+            wd->last_requested_extent = wd->extent;
+            vk_check(vkwsi_swapchain_resize(wd->swapchain, wd->last_requested_extent));
         }
 
         // Handle window destruction
@@ -515,18 +568,18 @@ int main()
             std::erase_if(windows, [&](auto& wd) {
 
                 if (wd->close_requested) {
-
-                    // NOTE: We unlock while destroying to avoid deadlocking the main thread
-                    m.unlock();
-                    defer { m.lock(); };
-
                     log_info("Window {} close acknowledge on render thread, destroying Vulkan resources", (void*)wd->window);
                     vkwsi_swapchain_destroy(wd->swapchain);
                     vkDestroySurfaceKHR(instance, wd->surface, nullptr);
+#if VKWSI_TEST_USE_SDL
                     SDL_RunOnMainThread([](void* window) {
                         log_info("Window {} resource destruction acknowledged by main thread, destroying SDL window", window);
                         SDL_DestroyWindow((SDL_Window*)window);
                     }, wd->window, false);
+#endif
+#if VKWSI_TEST_USE_GLFW
+                    glfw_window_close_list.emplace_back(wd->window);
+#endif
                     return true;
                 }
                 return false;
@@ -564,8 +617,9 @@ int main()
 
             {
                 // If the actual swapchain size doesn't match expected, recheck swapchain size on main thread
-                VkExtent2D expected = wd->extent;
+                VkExtent2D expected = wd->last_requested_extent;
                 if (expected.width != current.extent.width || expected.height != current.extent.height) {
+#if VKWSI_TEST_USE_SDL
                     log_warn("Expected size mismatch, requesting SDL thread check window size");
                     SDL_Event event {
                         .user = {
@@ -575,6 +629,10 @@ int main()
                         },
                     };
                     SDL_PushEvent(&event);
+#endif
+#if VKWSI_TEST_USE_GLFW
+                    log_warn("Expected swapchain image size mismatch");
+#endif
                 }
             }
 
@@ -677,7 +735,9 @@ int main()
             ;
     }};
 
-    auto on_window_resize = [&](SDL_Window* window, int w, int h) {
+    // Main thread event loop
+
+    auto on_window_resize = [&](decltype(window_data::window) window, int w, int h) {
         std::scoped_lock m{ windows_mutex };
         for (auto& wd : windows) {
             if (wd->window == window) {
@@ -688,6 +748,7 @@ int main()
         }
     };
 
+#if VKWSI_TEST_USE_SDL
     // NOTE: Window size events need to be handled from an event watched as the main event loop
     //       isn't running during resize operations on Windows due to modal resizing.
     auto event_watch = [&](SDL_Event* event) {
@@ -700,18 +761,17 @@ int main()
         return true;
     }, &event_watch);
 
-    // Main thread event loop
-
     SDL_Event event;
     while (SDL_WaitEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT) {
+            log_info("SDL Quit event receieved, exiting main loop");
             break;
         }
-
-        if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+        else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
             std::scoped_lock m{ windows_mutex };
+            auto event_window = SDL_GetWindowFromEvent(&event);
             for (auto& wd : windows) {
-                if (SDL_GetWindowID(wd->window) == event.window.windowID) {
+                if (wd->window == event_window) {
                     log_info("Window {} close requested (id = {})", (void*)wd->window, event.window.windowID);
                     wd->close_requested = true;
                     break;
@@ -728,8 +788,6 @@ int main()
         }
     }
 
-    // Shutting down
-
     {
         // Mark all remaining windows to be closed by render thread
         // The render thread will end when all windows are closed
@@ -743,8 +801,38 @@ int main()
             wd->close_requested = true;
         }
     }
+#endif
+#if VKWSI_TEST_USE_GLFW
+    for (auto& wd : windows) {
+        glfwSetWindowUserPointer(wd->window, &on_window_resize);
+        glfwSetWindowSizeCallback(wd->window, [](GLFWwindow* window, int w, int h) {
+            (*(decltype(on_window_resize)*)glfwGetWindowUserPointer(window))(window, w, h);
+        });
+    }
+    for (;;) {
+        glfwWaitEventsTimeout(0.1);
 
-    log_info("Quit event receieved, waiting for render loop to complete");
+        std::scoped_lock m{ windows_mutex };
+        for (auto& wd : windows) {
+            if (!wd->close_requested && glfwWindowShouldClose(wd->window)) {
+                log_info("Window {} close requested", (void*)wd->window);
+                wd->close_requested = true;
+            }
+        }
+
+        for (auto& window : glfw_window_close_list) {
+            log_info("Window {} resource destruction acknowledged by main thread, destroying GLFW window", (void*)window);
+            glfwDestroyWindow(window);
+        }
+        glfw_window_close_list.clear();
+
+        if (windows.empty()) {
+            break;
+        }
+    }
+#endif
+
+    log_info("All windows closed, waiting for render loop to complete");
 
     // TODO: Perform a timeout wait on the render thread, and terminate program (crash) on timeout
     //       To avoid issues with render_thread being deadlocked

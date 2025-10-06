@@ -5,6 +5,11 @@ FetchContent_Declare(SDL
     GIT_TAG main)
 FetchContent_MakeAvailable(SDL)
 
+FetchContent_Declare(GLFW
+    GIT_REPOSITORY https://github.com/glfw/glfw.git
+    GIT_TAG master)
+FetchContent_MakeAvailable(GLFW)
+
 add_executable(vk-wsi-test)
 
 # target_compile_options(vk-wsi-test PUBLIC
@@ -22,4 +27,5 @@ target_sources(vk-wsi-test PUBLIC
 target_link_libraries(vk-wsi-test PUBLIC
     vk-wsi::vk-wsi
     SDL3::SDL3
+    glfw
     )
