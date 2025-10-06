@@ -46,6 +46,8 @@ struct vkwsi_context : vkwsi_functions
     VkPhysicalDevice physical_device;
     const VkAllocationCallbacks* alloc = {};
 
+    vkwsi_log_callback log_callback = {};
+
 #if VKWSI_DEBUG_LINEARIZE
     VkFence debug_fence = {};
 #endif

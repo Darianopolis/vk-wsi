@@ -39,26 +39,58 @@ struct Defer
     ~Defer() { fn(); };
 };
 
+// -----------------------------------------------------------------------------
+
 #define VKWSI_TEST_CONCAT_INTERNAL(a, b) a##b
 #define VKWSI_TEST_CONCAT(a, b) VKWSI_TEST_CONCAT_INTERNAL(a, b)
 #define VKWSI_TEST_UNIQUE_VAR() VKWSI_TEST_CONCAT(vkwsi_var_, __COUNTER__)
 
 #define defer Defer VKWSI_TEST_UNIQUE_VAR() = [&]
 
+#define VT_color_begin(color) "\u001B[" #color "m"
+#define VT_color_reset "\u001B[0m"
+#define VT_color(color, text) VT_color_begin(color) text VT_color_reset
+
 template<typename ...Args>
-void log(std::format_string<Args...> fmt, Args&&... args)
+void log_trace(std::format_string<Args...> fmt, Args&&... args)
 {
-    std::cout << std::vformat(fmt.get(), std::make_format_args(args...)) << '\n';
+    std::cout << std::format("[" VT_color(90, "TRACE") "] " VT_color(90, "{}") "\n", std::vformat(fmt.get(), std::make_format_args(args...)));
 }
+
+template<typename ...Args>
+void log_debug(std::format_string<Args...> fmt, Args&&... args)
+{
+    std::cout << std::format("[" VT_color(96, "DEBUG") "] {}\n", std::vformat(fmt.get(), std::make_format_args(args...)));
+}
+
+template<typename ...Args>
+void log_info(std::format_string<Args...> fmt, Args&&... args)
+{
+    std::cout << std::format(" [" VT_color(94, "INFO") "] {}\n", std::vformat(fmt.get(), std::make_format_args(args...)));
+}
+
+template<typename ...Args>
+void log_warn(std::format_string<Args...> fmt, Args&&... args)
+{
+    std::cout << std::format(" [" VT_color(93, "WARN") "] {}\n", std::vformat(fmt.get(), std::make_format_args(args...)));
+}
+
+template<typename ...Args>
+void log_error(std::format_string<Args...> fmt, Args&&... args)
+{
+    std::cout << std::format("[" VT_color(91, "ERROR") "] {}\n", std::vformat(fmt.get(), std::make_format_args(args...)));
+}
+
+// -----------------------------------------------------------------------------
 
 template<typename... Args>
 [[noreturn]] void error(std::source_location loc, std::format_string<Args...> fmt, Args&& ...args)
 {
-    std::cout << std::format("ERROR({} @ {}):\n", loc.line(), loc.file_name());
-    std::cout << std::vformat(fmt.get(), std::make_format_args(args...)) << '\n';
-    std::cin.get();
+    log_error("{}:{} :: {}", loc.file_name(), loc.line(), std::vformat(fmt.get(), std::make_format_args(args...)));
     std::exit(1);
 }
+
+// -----------------------------------------------------------------------------
 
 struct LocatedVkResult
 {
@@ -121,7 +153,7 @@ int main()
     SDL_Vulkan_LoadLibrary(nullptr);
     auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
 
-    log("vkGetInstanceProcAddr: {}", (void*)vkGetInstanceProcAddr);
+    log_info("vkGetInstanceProcAddr: {}", (void*)vkGetInstanceProcAddr);
     if (!vkGetInstanceProcAddr) {
         error(std::source_location::current(), "Could not load vulkan loader");
     }
@@ -132,7 +164,7 @@ int main()
         VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
     };
     {
-        Uint32 instance_extension_count;
+        uint32_t instance_extension_count;
         auto* list = SDL_Vulkan_GetInstanceExtensions(&instance_extension_count);
         for (uint32_t i = 0; i < instance_extension_count; ++i) {
             instance_extensions.emplace_back(list[i]);
@@ -142,7 +174,7 @@ int main()
     VkInstance instance = {};
     vk_instance_fn(vkCreateInstance);
 
-    log("vkCreateInstance: {}", (void*)vkCreateInstance);
+    log_info("vkCreateInstance: {}", (void*)vkCreateInstance);
 
     vk_check(vkCreateInstance(ptr_to(VkInstanceCreateInfo {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
@@ -154,7 +186,7 @@ int main()
         .ppEnabledExtensionNames = instance_extensions.data(),
     }), nullptr, &instance));
 
-    log("instance: {}", (void*)instance);
+    log_info("instance: {}", (void*)instance);
 
     vk_instance_fn(vkEnumeratePhysicalDevices);
     vk_instance_fn(vkGetPhysicalDeviceProperties2);
@@ -333,6 +365,16 @@ int main()
         .device = device,
         .physical_device = physical_device,
         .get_instance_proc_addr = vkGetInstanceProcAddr,
+        .log_callback = {
+            .fn = [](void*, vkwsi_log_level level, const char* message) {
+                switch (level) {
+                    break;case vkwsi_log_level_error: log_error("vkwsi :: {}", message);
+                    break;case vkwsi_log_level_warn:  log_warn ("vkwsi :: {}", message);
+                    break;case vkwsi_log_level_info:  log_info ("vkwsi :: {}", message);
+                    break;case vkwsi_log_level_trace: log_trace("vkwsi :: {}", message);
+                }
+            },
+        }
     })));
     defer { vkwsi_context_destroy(context); };
 
@@ -343,7 +385,7 @@ int main()
         SDL_Window* window;
         VkSurfaceKHR surface;
         vkwsi_swapchain* swapchain;
-        std::atomic<bool> close_requested = false;
+        bool close_requested = false;
         std::atomic<VkExtent2D> extent;
     };
 
@@ -411,6 +453,8 @@ int main()
             VkExtent2D extent { uint32_t(w), uint32_t(h) };
             wd.extent = extent;
 
+            log_info("window[{}] initial size ({}, {})", i, w, h);
+
             vk_check(vkwsi_swapchain_resize(wd.swapchain, extent));
         }
     }
@@ -421,6 +465,8 @@ int main()
     auto last_report = std::chrono::steady_clock::now();
     uint32_t fps = 0;
 #endif
+
+    auto sdl_recheck_size_event = SDL_RegisterEvents(1);
 
     auto render = [&]() -> bool {
         auto fif = (frame++) % frames_in_flight;
@@ -438,7 +484,7 @@ int main()
             fps++;
             auto now = std::chrono::steady_clock::now();
             if (now - last_report > 1s) {
-                log("FPS: {}", fps);
+                log_info("FPS: {}", fps);
                 fps = 0;
                 last_report = now;
             }
@@ -448,7 +494,7 @@ int main()
         // Update window swapchain sizes
         //
         // NOTE: We do not need to lock `windows_mutex` when iterating over windows if
-        //       we do not invalidate iterators or mutate any state that the main thread needs to read.
+        //       we do not invalidate iterators or attempt to read `close_requested`
 
         for (auto& wd : windows) {
             vk_check(vkwsi_swapchain_resize(wd->swapchain, wd->extent));
@@ -457,7 +503,7 @@ int main()
         // Handle window destruction
 
         {
-            std::scoped_lock m{ windows_mutex };
+            std::unique_lock m{ windows_mutex };
 
             // NOTE: Window destruction is handled across both the Render and Main thread to ensure all resources are destroyed safely.
             //       1. Main thread receieves SDL_EVENT_WINDOW_CLOSE_REQUESTED
@@ -467,12 +513,18 @@ int main()
             //          (which naturally waits for all prior presentation operations to complete)
             //       5. Render thread registers callback to run on Main thread to finally close the SDL window
             std::erase_if(windows, [&](auto& wd) {
+
                 if (wd->close_requested) {
-                    log("Window {} close acknowledge on render thread, destroying Vulkan resources", (void*)wd->window);
+
+                    // NOTE: We unlock while destroying to avoid deadlocking the main thread
+                    m.unlock();
+                    defer { m.lock(); };
+
+                    log_info("Window {} close acknowledge on render thread, destroying Vulkan resources", (void*)wd->window);
                     vkwsi_swapchain_destroy(wd->swapchain);
                     vkDestroySurfaceKHR(instance, wd->surface, nullptr);
                     SDL_RunOnMainThread([](void* window) {
-                        log("Window {} resource destruction acknowledged by main thread, destroying SDL window", window);
+                        log_info("Window {} resource destruction acknowledged by main thread, destroying SDL window", window);
                         SDL_DestroyWindow((SDL_Window*)window);
                     }, wd->window, false);
                     return true;
@@ -510,8 +562,21 @@ int main()
             auto current = vkwsi_swapchain_get_current(wd->swapchain);
             auto image = current.image;
 
-            // NOTE: This forms a closed-loop system that corrects known extent to the achieved extent.
-            wd->extent.store(current.extent);
+            {
+                // If the actual swapchain size doesn't match expected, recheck swapchain size on main thread
+                VkExtent2D expected = wd->extent;
+                if (expected.width != current.extent.width || expected.height != current.extent.height) {
+                    log_warn("Expected size mismatch, requesting SDL thread check window size");
+                    SDL_Event event {
+                        .user = {
+                            .type = SDL_EVENT_USER,
+                            .code = Sint32(sdl_recheck_size_event),
+                            .data1 = wd->window,
+                        },
+                    };
+                    SDL_PushEvent(&event);
+                }
+            }
 
             auto transition = [&](VkCommandBuffer cmd, VkImage image,
                 VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
@@ -605,33 +670,29 @@ int main()
 
     // Launch Render thread
 
-    defer { log("Render thread closed"); };
+    defer { log_info("Render thread closed"); };
 
     std::jthread render_thread {[&] {
         while (render())
             ;
     }};
 
+    auto on_window_resize = [&](SDL_Window* window, int w, int h) {
+        std::scoped_lock m{ windows_mutex };
+        for (auto& wd : windows) {
+            if (wd->window == window) {
+                log_trace("Window {} resized ({}, {})", (void*)wd->window, w, h);
+                wd->extent = { uint32_t(w), uint32_t(h) };
+                break;
+            }
+        }
+    };
+
     // NOTE: Window size events need to be handled from an event watched as the main event loop
     //       isn't running during resize operations on Windows due to modal resizing.
-
     auto event_watch = [&](SDL_Event* event) {
-        if (!SDL_IsMainThread()) {
-            log("WARN: Event Listener called from other thread!");
-            return;
-        }
-
         if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-            auto w = event->window.data1;
-            auto h = event->window.data2;
-            std::scoped_lock m{ windows_mutex };
-            for (auto& wd : windows) {
-                if (SDL_GetWindowID(wd->window) == event->window.windowID) {
-                    log("Window {} resized ({}, {}) (id = {})", (void*)wd->window, w, h, event->window.windowID);
-                    wd->extent = { uint32_t(w), uint32_t(h) };
-                    break;
-                }
-            }
+            on_window_resize(SDL_GetWindowFromEvent(event), event->window.data1, event->window.data2);
         }
     };
     SDL_AddEventWatch([](void *userdata, SDL_Event *event) -> bool {
@@ -651,10 +712,18 @@ int main()
             std::scoped_lock m{ windows_mutex };
             for (auto& wd : windows) {
                 if (SDL_GetWindowID(wd->window) == event.window.windowID) {
-                    log("Window {} close requested (id = {})", (void*)wd->window, event.window.windowID);
+                    log_info("Window {} close requested (id = {})", (void*)wd->window, event.window.windowID);
                     wd->close_requested = true;
                     break;
                 }
+            }
+        }
+        else if (event.type == SDL_EVENT_USER) {
+            if (event.user.code == sdl_recheck_size_event) {
+                auto window = static_cast<SDL_Window*>(event.user.data1);
+                int w, h;
+                SDL_GetWindowSizeInPixels(window, &w, &h);
+                on_window_resize(window, w, h);
             }
         }
     }
@@ -665,18 +734,18 @@ int main()
         // Mark all remaining windows to be closed by render thread
         // The render thread will end when all windows are closed
 
-        // NOTE: At this point the SDL_RunInMainThread callbacks for any remaining `SDL_Window`s
+        // NOTE: At this point the SDL_RunOnMainThread callbacks for any remaining `SDL_Window`s
         //       won't run, as the event loop has already shut down. But this is ok as SDL
         //       will close any remaining window resources when the VIDEO subsystem is shut down.
 
         std::scoped_lock m{ windows_mutex };
         for (auto& wd : windows) {
-            if (SDL_GetWindowID(wd->window) == event.window.windowID) {
-                wd->close_requested = true;
-                break;
-            }
+            wd->close_requested = true;
         }
     }
 
-    log("Quit event receieved, waiting for render loop to complete");
+    log_info("Quit event receieved, waiting for render loop to complete");
+
+    // TODO: Perform a timeout wait on the render thread, and terminate program (crash) on timeout
+    //       To avoid issues with render_thread being deadlocked
 }

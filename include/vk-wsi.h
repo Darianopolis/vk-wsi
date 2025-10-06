@@ -13,12 +13,30 @@ extern "C" {
 
 // TODO: Documentation comments
 
+typedef enum vkwsi_log_level
+{
+    vkwsi_log_level_trace,
+    vkwsi_log_level_warn,
+    vkwsi_log_level_info,
+    vkwsi_log_level_error,
+} vkwsi_log_level;
+
+typedef void(*vkwsi_log_callback_fn)(void*, vkwsi_log_level, const char*);
+
+typedef struct vkwsi_log_callback
+{
+    vkwsi_log_callback_fn fn;
+    void* data;
+} vkwsi_log_callback;
+
 typedef struct vkwsi_context_info
 {
     VkInstance instance;
     VkDevice device;
     VkPhysicalDevice physical_device;
     PFN_vkGetInstanceProcAddr get_instance_proc_addr;
+
+    vkwsi_log_callback log_callback;
 } vkwsi_context_info;
 
 typedef struct vkwsi_context vkwsi_context;
