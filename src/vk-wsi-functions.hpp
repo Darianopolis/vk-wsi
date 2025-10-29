@@ -2,22 +2,22 @@
 
 #include "vk-wsi.h"
 
-#define VULKAN_INSTANCE_FUNCTIONS(DO)            \
+#define VKWSI_INSTANCE_FUNCTIONS(DO)             \
     /* Loading */                                \
     DO(GetDeviceProcAddr)                        \
     /* Surface capabiltliies */                  \
     DO(GetPhysicalDeviceSurfaceCapabilities2KHR) \
     DO(GetPhysicalDeviceSurfacePresentModesKHR)  \
 
-#define VULKAN_DEVICE_FUNCTIONS(DO) \
+#define VKWSI_DEVICE_FUNCTIONS(DO)  \
+DO(SetDebugUtilsObjectNameEXT)  \
     /* Debug */                     \
-    DO(SetDebugUtilsObjectNameEXT)  \
     /* Semaphores */                \
     DO(CreateSemaphore)             \
     DO(WaitSemaphores)              \
     DO(GetSemaphoreCounterValue)    \
     DO(DestroySemaphore)            \
-    /* Fencces */                   \
+    /* Fences */                    \
     DO(CreateFence)                 \
     DO(ResetFences)                 \
     DO(WaitForFences)               \
@@ -34,15 +34,15 @@
     DO(QueuePresentKHR)             \
     DO(QueueSubmit2)                \
 
-#define VULKAN_DECLARE_FUNCTION(      funcName, ...) PFN_vk##funcName funcName;
-#define VULKAN_LOAD_INSTANCE_FUNCTION(funcName, ...) functions->funcName = (PFN_vk##funcName)functions->GetInstanceProcAddr(instance, "vk"#funcName);
-#define VULKAN_LOAD_DEVICE_FUNCTION(  funcName, ...) functions->funcName = (PFN_vk##funcName)functions->GetDeviceProcAddr(  device,   "vk"#funcName);
+#define VKWSI_DECLARE_FUNCTION(      funcName, ...) PFN_vk##funcName funcName;
+#define VKWSI_LOAD_INSTANCE_FUNCTION(funcName, ...) functions->funcName = (PFN_vk##funcName)functions->GetInstanceProcAddr(instance, "vk"#funcName);
+#define VKWSI_LOAD_DEVICE_FUNCTION(  funcName, ...) functions->funcName = (PFN_vk##funcName)functions->GetDeviceProcAddr(  device,   "vk"#funcName);
 
 struct vkwsi_functions
 {
-    VULKAN_DECLARE_FUNCTION(GetInstanceProcAddr)
-    VULKAN_INSTANCE_FUNCTIONS(VULKAN_DECLARE_FUNCTION)
-    VULKAN_DEVICE_FUNCTIONS(VULKAN_DECLARE_FUNCTION)
+    VKWSI_DECLARE_FUNCTION(GetInstanceProcAddr)
+    VKWSI_INSTANCE_FUNCTIONS(VKWSI_DECLARE_FUNCTION)
+    VKWSI_DEVICE_FUNCTIONS(VKWSI_DECLARE_FUNCTION)
 };
 
 inline
@@ -50,6 +50,6 @@ void vkwsi_init_functions(vkwsi_functions* functions, VkInstance instance, VkDev
 {
     functions->GetInstanceProcAddr = loadFn;
 
-    VULKAN_INSTANCE_FUNCTIONS(VULKAN_LOAD_INSTANCE_FUNCTION)
-    VULKAN_DEVICE_FUNCTIONS(VULKAN_LOAD_DEVICE_FUNCTION)
+    VKWSI_INSTANCE_FUNCTIONS(VKWSI_LOAD_INSTANCE_FUNCTION)
+    VKWSI_DEVICE_FUNCTIONS(VKWSI_LOAD_DEVICE_FUNCTION)
 }

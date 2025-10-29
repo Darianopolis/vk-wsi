@@ -10,8 +10,9 @@ FetchContent_Declare(GLFW
     GIT_TAG master)
 FetchContent_MakeAvailable(GLFW)
 
-add_executable(vk-wsi-test)
+# ------------------------------------------------------------------------------
 
+add_executable(vk-wsi-test)
 # target_compile_options(vk-wsi-test PUBLIC
 #     -fsanitize=address,undefined
 #     )
@@ -19,7 +20,6 @@ add_executable(vk-wsi-test)
 #     asan
 #     ubsan
 #     )
-
 target_compile_features(vk-wsi-test PUBLIC cxx_std_20)
 target_sources(vk-wsi-test PUBLIC
     vk-wsi-test.cpp

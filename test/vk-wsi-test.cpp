@@ -1,7 +1,7 @@
 #include "vk-wsi.h"
 
-#define VKWSI_TEST_USE_SDL 0
-#define VKWSI_TEST_USE_GLFW 1
+#define VKWSI_TEST_USE_SDL 1
+#define VKWSI_TEST_USE_GLFW 0
 
 #if VKWSI_TEST_USE_SDL
 #include <SDL3/SDL.h>
@@ -10,6 +10,7 @@
 
 #if VKWSI_TEST_USE_GLFW
 #include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 #endif
 
 #include <format>
@@ -155,6 +156,8 @@ int main()
 
 // -----------------------------------------------------------------------------
 
+    const char* platform_name = "?";
+
 #if VKWSI_TEST_USE_SDL
     SDL_Init(SDL_INIT_VIDEO);
     defer {
@@ -162,6 +165,8 @@ int main()
     };
     SDL_Vulkan_LoadLibrary(nullptr);
     auto vkGetInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(SDL_Vulkan_GetVkGetInstanceProcAddr());
+    const char* toolkit_name = "SDL3";
+    platform_name = SDL_GetCurrentVideoDriver();
 #endif
 #if VKWSI_TEST_USE_GLFW
     glfwInit();
@@ -170,7 +175,15 @@ int main()
     };
     glfwInitVulkanLoader(nullptr);
     auto vkGetInstanceProcAddr = &glfwGetInstanceProcAddress;
+    const char* toolkit_name = "GLFW";
+    if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+        platform_name = "wayland";
+    } if (glfwGetPlatform() == GLFW_PLATFORM_X11) {
+        platform_name = "x11";
+    }
 #endif
+
+    log_info("Using {} ({})", toolkit_name, platform_name);
 
     log_info("vkGetInstanceProcAddr: {}", (void*)vkGetInstanceProcAddr);
     if (!vkGetInstanceProcAddr) {
@@ -550,6 +563,7 @@ int main()
 
         for (auto& wd : windows) {
             wd->last_requested_extent = wd->extent;
+
             vk_check(vkwsi_swapchain_resize(wd->swapchain, wd->last_requested_extent));
         }
 

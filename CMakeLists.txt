@@ -17,7 +17,7 @@ add_library(vk-wsi::vk-wsi ALIAS vk-wsi)
 
 # ------------------------------------------------------------------------------
 
-option(VKWSI_BUILD_TESTS "Build the vk-wise tests/examples" OFF)
+option(VKWSI_BUILD_TESTS "Build the vk-wsi tests/examples" OFF)
 
 if (VKWSI_BUILD_TESTS)
     add_subdirectory(test)

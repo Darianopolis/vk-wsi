@@ -31,8 +31,6 @@ struct vkwsi_defer_guard
 
 #define defer vkwsi_defer_guard VKWSI_UNQIUE_VAR() = [&]
 
-// TODO: Implement logging callbacks?
-
 struct vkwsi_acquire_resources
 {
     uint64_t timeline_value;
