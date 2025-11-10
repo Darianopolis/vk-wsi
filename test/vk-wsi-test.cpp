@@ -150,7 +150,7 @@ int main()
 {
     // Options
 
-    static constexpr uint32_t num_windows = 3;
+    static constexpr uint32_t num_windows = 1;
     static constexpr uint32_t frames_in_flight = 3;
     static constexpr VkExtent2D initial_window_size = { 800, 600 };
 
@@ -735,7 +735,7 @@ int main()
 
         // Present to swapchains
 
-        vkwsi_swapchain_present(swapchains.data(), swapchains.size(), queue, &render_complete, 1, false);
+        vk_check(vkwsi_swapchain_present(swapchains.data(), swapchains.size(), queue, &render_complete, 1, false));
 
         return true;
     };

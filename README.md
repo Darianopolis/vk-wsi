@@ -2,6 +2,49 @@
 
 This library aims to be a general purpose abstraction layer around the Vulkan WSI interface.
 
+## Quick Start
+
+#### Create context
+
+```c++
+vkwsi_context* vkwsi;
+vkwsi_context_info info = {
+    .instance = instance,
+    .device = device,
+    .physical_device = physical_device,
+    .get_instance_proc_addr = vkGetInstanceProcAddr,
+};
+VkResult res = vkwsi_context_create(&vkwsi, &info);
+```
+
+#### Create swapchain
+
+```c++
+vkwsi_swapchain* swapchain;
+VkResult res = vkwsi_swapchain_create(&swapchain, vkwsi, surface);
+vkwsi_swapchain_info info = vkwsi_swapchain_info_default();
+info.image_usage = ...;
+vkwsi_swapchain_set_info(swapchain, &info);
+```
+
+#### Resize and acquire
+
+```c++
+vkwsi_swapchain_resize(swapchain, extent);
+
+VkSemaphoreSubmitInfoKHR image_ready = { ... };
+VkResult res = vkwsi_swapchain_acquire(swapchain, 1, queue, &image_ready, 1);
+
+vkwsi_swapchain_image current = vkwsi_swapchain_get_current(swapchain);
+```
+
+#### Present
+
+```c++
+VkSemaphoreSubmitInfoKHR render_complete = { ... };
+VkResult res = vkwsi_swapchain_present(swapchain, 1, queue, &render_complete, 1, false);
+```
+
 ## Goals
 
 - Be correct! And make mistakes easy to diagnose
