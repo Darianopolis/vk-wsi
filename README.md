@@ -1,26 +1,24 @@
 # Vulkan WSI Library
 
-This library aims to wrap the Vulkan WSI interface in a slightly more friendly API:
+This library aims to wrap a subset of the Vulkan WSI interface in a more friendly API:
 
-- Allow clients to communicate entirely in timeline semaphores. No special casing sync for WSI.
-- Adapt the legacy binary semaphore interface onto timeline sempahores.
-- Utilize present fences for *correct* swapchain resource lifetime management without relying on queue wait idles.
-- Use a minimal number of semaphores and fences to achieve highest throughput and minimal latency on presentation.
-- Avoid requiring any explicit concept of a "frame".
+- Dynamic swapchain recreation
+- Timeline semaphore synchronization
+- No fixed "frames in flight" required
 
-### Non-Goals
+## Usage
 
-- Support every possible combination of supported Vulkan extensions.
-    - Too much core functionality relies on the presence of a handful extensions.
-    - No extensions here have any special hardware requirements.
-- 100% API coverage of the underlying WSI interface.
+#### Include
 
-# Usage
+```c++
+#include <vkwsi.h>
+```
 
 #### Create context
 
 ```c++
 vkwsi_context* vkwsi;
+
 vkwsi_context_info info = {
     .instance = instance,
     .device = device,
@@ -34,29 +32,56 @@ VkResult res = vkwsi_context_create(&vkwsi, &info);
 
 ```c++
 vkwsi_swapchain* swapchain;
+
+VkSurfaceKHR surface = ...;
 VkResult res = vkwsi_swapchain_create(&swapchain, vkwsi, surface);
-vkwsi_swapchain_info info = vkwsi_swapchain_info_default();
-info.image_usage = ...;
-vkwsi_swapchain_set_info(swapchain, &info);
 ```
 
-#### Resize and acquire
+#### Acquire image(s)
 
 ```c++
-vkwsi_swapchain_resize(swapchain, extent);
+vkwsi_image* image;
 
+vkwsi_acquire_info info = { ... };
+VkResult res = vkwsi_acquire(swapchain, &info, &image);
+```
+
+#### Transfer sync from acquired images to a number of timeline semaphores
+
+```c++
 VkSemaphoreSubmitInfoKHR image_ready = { ... };
-VkResult res = vkwsi_swapchain_acquire(swapchain, 1, queue, &image_ready, 1);
+VkResult res = vkwsi_transfer(vkwsi, &image, 1, queue, &image_ready, 1);
+```
 
-vkwsi_swapchain_image current = vkwsi_swapchain_get_current(swapchain);
+#### Record
+
+```c++
+VkExtent2D extent = vkwsi_image_get_extent(image);
+VkImageView view = vkwsi_image_get_image_view(image);
+// ...
+```
+
+#### Submit
+
+```c++
+VkSemaphoreSubmitInfoKHR render_complete = { ... };
+VkSubmitInfo2 submit_info = {
+    .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+    .waitSemaphoreInfoCount = 1,
+    .pWaitSemaphoreInfos = &image_ready,
+    // ...
+    .signalSemaphoreInfoCount = 1,
+    .pSignalSemaphoreInfos = &render_complete,
+}
+VkResult res = vkQueueSubmit2(queue, 1, &submit_info, nullptr);
 ```
 
 #### Present
 
 ```c++
-VkSemaphoreSubmitInfoKHR render_complete = { ... };
-VkResult res = vkwsi_swapchain_present(swapchain, 1, queue, &render_complete, 1, false);
+VkResult res = vkwsi_present(vkwsi, &image, 1, queue, &render_complete, 1);
 ```
+
 ## Vulkan Extensions
 
 A handful of extensions are required, there are no optional extensions in the interest of keeping a focus on the core functionality of the library. All these extensions should be widely available on any actively supported hardware, and there are no particular hardware requirements.
@@ -75,8 +100,17 @@ A handful of extensions are required, there are no optional extensions in the in
 
 ## Building
 
-The library is available as a simple CMake project. Simply add and link against the `vk-wsi::vk-wsi` target (prefer the alias over the internal underlying `vk-wsi` target).
+The library is available as a simple CMake project. Simply add and link against the `vkwsi::vkwsi` target (prefer the alias over the internal underlying `vkwsi` target).
 
-You will need a C++20 capable compiler to build the library.
+A C++20 capable compiler is required to build the library.
 
-Pass/Enable `-DVKWSI_BUILD_TESTS=ON` to build the example program (this will fetch SDL)
+## Example
+
+Configure with `-DVKWSI_BUILD_TESTS=ON` to build the example program (this will fetch and build SDL3)
+
+A C++23 capable compiler is required to build the example.
+
+## Future Work
+
+ - Present timing
+ - Threaded acquisition and present

@@ -8,7 +8,7 @@
         "name": "(gdb) Launch",
         "type": "cppdbg",
         "request": "launch",
-        "program": "${workspaceFolder}/build/test/vk-wsi-test",
+        "program": "${workspaceFolder}/build/test/vkwsi-test",
         "args": [],
         "stopAtEntry": false,
         "cwd": "${fileDirname}",
