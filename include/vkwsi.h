@@ -30,14 +30,14 @@ VkPresentModeKHR vkwsi_select_present_mode(vkwsi_context*, VkSurfaceKHR, const V
 
 typedef struct vkwsi_swapchain vkwsi_swapchain;
 
+VkResult vkwsi_swapchain_create( vkwsi_swapchain**, vkwsi_context*, VkSurfaceKHR);
+void     vkwsi_swapchain_destroy(vkwsi_swapchain*);
+
 typedef struct vkwsi_image vkwsi_image;
 
 VkExtent2D  vkwsi_image_get_extent(vkwsi_image*);
 VkImage     vkwsi_image_get_image( vkwsi_image*);
 VkImageView vkwsi_image_get_view(  vkwsi_image*);
-
-VkResult vkwsi_swapchain_create( vkwsi_swapchain**, vkwsi_context*, VkSurfaceKHR);
-void     vkwsi_swapchain_destroy(vkwsi_swapchain*);
 
 typedef struct vkwsi_acquire_info
 {

@@ -70,12 +70,14 @@ VkResult vkwsi_present(vkwsi_context* ctx, vkwsi_image** images, uint32_t image_
         images[i]->present_result = results[i];
         if (results[i] == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR) {
             images[i]->swapchain->out_of_date = true;
-        } else {
+        } else if (res != VK_SUCCESS) {
             res = results[i];
+            fences[i] = nullptr;
         }
     }
 
-    VKWSI_CHECK(ctx->vk.WaitForFences(ctx->device, image_count, fences.data(), true, UINT64_MAX));
+    std::erase(fences, nullptr);
+    VKWSI_CHECK(ctx->vk.WaitForFences(ctx->device, fences.size(), fences.data(), true, UINT64_MAX));
 
     return res;
 }

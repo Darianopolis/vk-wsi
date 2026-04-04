@@ -293,10 +293,8 @@ int main()
 
         // Create window
 
-        auto title = std::format("vkwsi-{}", i + 1);
-
         wd.window = SDL_CreateWindow(
-            title.c_str(),
+            std::format("vkwsi-{}", i + 1).c_str(),
             initial_window_size.width, initial_window_size.height,
             SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
 
@@ -304,22 +302,21 @@ int main()
             error("Failed to create SDL Vulkan surface: {}", SDL_GetError());
         }
 
-        check(vkwsi_swapchain_create(&wd.swapchain, vkwsi, wd.surface));
-
         // Select surface format
 
         VkSurfaceFormatKHR surface_format = {};
         std::vector<VkSurfaceFormatKHR> surface_formats;
         check(vkwsi_enumerate(surface_formats, vkGetPhysicalDeviceSurfaceFormatsKHR, physical_device, wd.surface));
         for (auto& f : surface_formats) {
-            // if (f.format == VK_FORMAT_R8G8B8A8_SRGB || f.format == VK_FORMAT_B8G8R8A8_SRGB) {
             if (f.format == VK_FORMAT_R8G8B8A8_UNORM || f.format == VK_FORMAT_B8G8R8A8_UNORM) {
                 surface_format = f;
                 break;
             }
         }
 
-        // Create vkwsi swapchain
+        // Create swapchain
+
+        check(vkwsi_swapchain_create(&wd.swapchain, vkwsi, wd.surface));
 
         wd.info = vkwsi_acquire_info_default();
         wd.info.image_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -335,14 +332,11 @@ int main()
 
         // Update initial extent
 
-        {
-            int w, h;
-            SDL_GetWindowSizeInPixels(wd.window, &w, &h);
-            VkExtent2D extent { uint32_t(w), uint32_t(h) };
-            wd.extent = extent;
+        int w, h;
+        SDL_GetWindowSizeInPixels(wd.window, &w, &h);
+        VkExtent2D extent { uint32_t(w), uint32_t(h) };
+        wd.extent = extent;
 
-            std::println("window[{}] initial size ({}, {})", i, w, h);
-        }
     }
 
     VKWSI_DEFER { wait_semaphore(semaphore, semaphore_last_value); };

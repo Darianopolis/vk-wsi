@@ -3,12 +3,12 @@
 
 #include <algorithm>
 
-VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info* info)
+VkResult vkwsi_context_create(vkwsi_context** out_ctx, const vkwsi_context_info* info)
 {
     auto ctx = new vkwsi_context {};
     VKWSI_DEFER { if (ctx) vkwsi_context_destroy(ctx); };
 
-    if (!info->instance || !info->device || !info->physical_device) {
+    if (!info->instance || !info->device || !info->physical_device || !info->get_instance_proc_addr) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
 
@@ -19,7 +19,7 @@ VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info* 
     vkwsi_init_functions(&ctx->vk, info->instance, info->device, info->get_instance_proc_addr);
     // TODO: Check that required functions have loaded
 
-    *pp_ctx = std::exchange(ctx, nullptr);
+    *out_ctx = std::exchange(ctx, nullptr);
     return VK_SUCCESS;
 }
 
@@ -34,11 +34,11 @@ VkPresentModeKHR vkwsi_select_present_mode(vkwsi_context* ctx, VkSurfaceKHR surf
     vkwsi_enumerate(available_present_modes, ctx->vk.GetPhysicalDeviceSurfacePresentModesKHR, ctx->physical_device, surface);
 
     for (uint32_t i = 0; i < present_mode_count; ++i) {
-        auto pm = present_modes[i];
+        auto mode = present_modes[i];
         auto begin = available_present_modes.begin();
         auto end = available_present_modes.end();
-        if (std::find(begin, end, pm) != end) {
-            return pm;
+        if (std::find(begin, end, mode) != end) {
+            return mode;
         }
     }
 
