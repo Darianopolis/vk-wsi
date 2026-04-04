@@ -8,10 +8,6 @@
 #include <span>
 #include <unordered_map>
 
-#ifndef VKWSI_DEBUG_LINEARIZE
-# define VKWSI_DEBUG_LINEARIZE 0
-#endif
-
 #define VKWSI_CONCAT_INTERNAL(a, b) a##b
 #define VKWSI_CONCAT(a, b) VKWSI_CONCAT_INTERNAL(a, b)
 #define VKWSI_UNQIUE_VAR() VKWSI_CONCAT(vkwsi_var_, __COUNTER__)
@@ -41,10 +37,6 @@ struct vkwsi_context : vkwsi_functions
     const VkAllocationCallbacks* alloc = {};
 
     vkwsi_log_callback log_callback = {};
-
-#if VKWSI_DEBUG_LINEARIZE
-    VkFence debug_fence = {};
-#endif
 
     VkSemaphore timeline = {};
     uint64_t timeline_value = 0;

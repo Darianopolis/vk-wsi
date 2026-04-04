@@ -66,24 +66,6 @@ constexpr bool operator==(VkExtent2D l, VkExtent2D r)
 
 // -----------------------------------------------------------------------------
 
-#if VKWSI_DEBUG_LINEARIZE
-static
-VkResult vkwsi_h_wait_and_reset_fence(vkwsi_context* ctx, VkFence fence)
-{
-    VkResult res;
-
-    res = ctx->WaitForFences(ctx->device, 1, &fence, true, UINT64_MAX);
-    VKWSI_CHECK(res);
-
-    res = ctx->ResetFences(ctx->device, 1, &fence);
-    VKWSI_CHECK(res);
-
-    return VK_SUCCESS;
-}
-#endif
-
-// -----------------------------------------------------------------------------
-
 vkwsi_swapchain_info vkwsi_swapchain_info_default()
 {
     return {
@@ -128,13 +110,6 @@ VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info* 
     vkwsi_init_functions(ctx, info->instance, info->device, info->get_instance_proc_addr);
     // TODO: Check that required functions have loaded
 
-#if VKWSI_DEBUG_LINEARIZE
-    res = ctx->CreateFence(ctx->device, vkwsi_temp(VkFenceCreateInfo {
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-    }), ctx->alloc, &ctx->debug_fence);
-    VKWSI_CHECK(res);
-#endif
-
     res = ctx->CreateSemaphore(ctx->device, vkwsi_temp(VkSemaphoreCreateInfo {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         .pNext = vkwsi_temp(VkSemaphoreTypeCreateInfo {
@@ -152,10 +127,6 @@ VkResult vkwsi_context_create(vkwsi_context** pp_ctx, const vkwsi_context_info* 
 
 void vkwsi_context_destroy(vkwsi_context* ctx)
 {
-#if VKWSI_DEBUG_LINEARIZE
-    ctx->DestroyFence(ctx->device, ctx->debug_fence, ctx->alloc);
-#endif
-
     vkwsi_recover_binary_semaphores(ctx);
 
     for (auto& sema : ctx->binary_semaphores) {
@@ -548,12 +519,6 @@ VkResult vkwsi_swapchain_acquire(
     auto ctx = swapchains[0]->ctx;
     VkResult res;
 
-#if VKWSI_DEBUG_LINEARIZE
-        VkFence debug_fence = ctx->debug_fence;
-#else
-        VkFence debug_fence = nullptr;
-#endif
-
     // NOTE: We recovery acquire binary semaphores by polling the main context timeline semaphore
     //       We could also avoid the additional poll by recovering binary semaphores via the appropriate
     //       `vkwsi_on_swapchain_present_complete`, however this would force worst-case semaphore reuse.
@@ -602,7 +567,7 @@ VkResult vkwsi_swapchain_acquire(
                 }
             }
 
-            res = ctx->AcquireNextImageKHR(ctx->device, swapchain->swapchain, UINT64_MAX, wait_semaphore, debug_fence, &image_idx);
+            res = ctx->AcquireNextImageKHR(ctx->device, swapchain->swapchain, UINT64_MAX, wait_semaphore, nullptr, &image_idx);
             if (res == VK_ERROR_OUT_OF_DATE_KHR) {
                 swapchain->out_of_date = true;
                 VKWSI_LOG(ctx, vkwsi_log_level_warn, "Failed to acquire image due to OUT-OF-DATE condition, retrying...");
@@ -615,10 +580,6 @@ VkResult vkwsi_swapchain_acquire(
         if (res != VK_SUBOPTIMAL_KHR) {
             VKWSI_CHECK(res);
         }
-#if VKWSI_DEBUG_LINEARIZE
-        res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
-        VKWSI_CHECK(res);
-#endif
         swapchain->image_index = image_idx;
 
         // NOTE: In theory we should not have to wait at this point. As acquiring an
@@ -679,13 +640,8 @@ VkResult vkwsi_swapchain_acquire(
             .pWaitSemaphoreInfos = wait_infos.data() + i,
             .signalSemaphoreInfoCount = last ? (_signal_count + 1) : 1,
             .pSignalSemaphoreInfos = signals.data(),
-        }), debug_fence);
+        }), nullptr);
         VKWSI_CHECK(res);
-
-#if VKWSI_DEBUG_LINEARIZE
-        res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
-        VKWSI_CHECK(res);
-#endif
     }
 
     auto& resources = ctx->acquire_resource_release_queue.emplace_back();
@@ -720,12 +676,6 @@ VkResult vkwsi_swapchain_present(
     VkResult res;
 
     VkSemaphore binary_sema = nullptr;
-
-#if VKWSI_DEBUG_LINEARIZE
-        VkFence debug_fence = ctx->debug_fence;
-#else
-        VkFence debug_fence = nullptr;
-#endif
 
     if (wait_count > 0) {
         if (host_wait) {
@@ -762,13 +712,8 @@ VkResult vkwsi_swapchain_present(
                     .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                     .semaphore = binary_sema,
                 }),
-            }), debug_fence);
+            }), nullptr);
             VKWSI_CHECK(res);
-
-#if VKWSI_DEBUG_LINEARIZE
-            res = vkwsi_h_wait_and_reset_fence(ctx, debug_fence);
-            VKWSI_CHECK(res);
-#endif
         }
     }
 
@@ -833,13 +778,6 @@ VkResult vkwsi_swapchain_present(
             swapchain->resources[swapchain->image_index].last_present_wait_semaphore = binary_sema;
         }
     }
-
-#if VKWSI_DEBUG_LINEARIZE
-    for (uint32_t i = 0; i < swapchain_count; ++i) {
-        res = vkwsi_wait_for_present_complete(swapchains[i], swapchains[i]->image_index);
-        VKWSI_CHECK(res);
-    }
-#endif
 
     return VK_SUCCESS;
 }
