@@ -9,20 +9,20 @@
 // -----------------------------------------------------------------------------
 
 static
-void vkwsi_log_(vkwsi_context* ctx, vkwsi_log_level level, const char* message)
+void vkwsi_log(vkwsi_context* ctx, vkwsi_log_level level, const char* message)
 {
     ctx->log_callback.fn(ctx->log_callback.data, level, message);
 }
 
 template<typename ...Args>
 static
-void vkwsi_log_(vkwsi_context* ctx, vkwsi_log_level level, std::format_string<Args...> fmt, Args&&... args)
+void vkwsi_log(vkwsi_context* ctx, vkwsi_log_level level, std::format_string<Args...> fmt, Args&&... args)
 {
     ctx->log_callback.fn(ctx->log_callback.data, level, std::vformat(fmt.get(), std::make_format_args(args...)).c_str());
 }
 
 #define VKWSI_LOG(ctx, level, fmt, ...) \
-    if ((ctx)->log_callback.fn) vkwsi_log_(ctx, level, fmt __VA_OPT__(,) __VA_ARGS__)
+    if ((ctx)->log_callback.fn) vkwsi_log(ctx, level, fmt __VA_OPT__(,) __VA_ARGS__)
 
 // -----------------------------------------------------------------------------
 
@@ -175,38 +175,17 @@ VkPresentModeKHR vkwsi_context_pick_present_mode(vkwsi_context* ctx, VkSurfaceKH
 {
     VkResult res;
 
-    auto present_mode_to_string = [](VkPresentModeKHR pm) {
-        switch (pm) {
-            case VK_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
-            case VK_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
-            case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
-            case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
-            case VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR: return "SHARED_DEMAND_REFRESH";
-            case VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR: return "SHARED_CONTINUOUS_REFRESH";
-            case VK_PRESENT_MODE_FIFO_LATEST_READY_KHR: return "FIFO_LATEST_READY";
-            default: return "?";
-        }
-    };
-
     std::vector<VkPresentModeKHR> available_present_modes;
     res = vkwsi_enumerate(available_present_modes, ctx->GetPhysicalDeviceSurfacePresentModesKHR, ctx->physical_device, surface);
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "AVAILABLE PRESENT MODES:");
-    for (auto pm : available_present_modes) {
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, " - {}", present_mode_to_string(pm));
-    }
 
     for (uint32_t i = 0; i < present_mode_count; ++i) {
         auto pm = present_modes[i];
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, "CHECKING PRESENT MODE: {}", present_mode_to_string(pm));
         auto begin = available_present_modes.begin();
         auto end = available_present_modes.end();
         if (std::find(begin, end, pm) != end) {
-            VKWSI_LOG(ctx, vkwsi_log_level_trace, "  AVAILABLE!");
             return pm;
         }
     }
-
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "FALLING BACK TO FIFO PRESENT MODE");
 
     return VK_PRESENT_MODE_FIFO_KHR;
 }
@@ -217,9 +196,6 @@ VkResult vkwsi_get_fence(vkwsi_context* ctx, VkFence* p_fence)
     VkResult res;
 
     if (ctx->fences.empty()) {
-        static uint64_t debug_allocated_count = 0;
-        VKWSI_LOG(ctx, vkwsi_log_level_warn, "Allocated new fence: {}", ++debug_allocated_count);
-
         VkFence fence;
         res = ctx->CreateFence(ctx->device, vkwsi_temp(VkFenceCreateInfo {
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -254,10 +230,6 @@ VkResult vkwsi_get_binary_semaphore(vkwsi_context* ctx, VkSemaphore* p_semaphore
     VkResult res;
 
     if (ctx->binary_semaphores.empty()) {
-        // TODO: Separate debug tracking for acquire and present semaphores
-        static uint64_t debug_allocated_count = 0;
-        VKWSI_LOG(ctx, vkwsi_log_level_warn, "Allocated new binary sempahore: {}", ++debug_allocated_count);
-
         VkSemaphore semaphore;
         res = ctx->CreateSemaphore(ctx->device, vkwsi_temp(VkSemaphoreCreateInfo {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -443,18 +415,6 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
 
     auto& surface_caps = caps.surfaceCapabilities;
 
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "Recreating swapchain");
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "        min_extent = ({:5}, {:5})", surface_caps.minImageExtent.width, surface_caps.minImageExtent.height);
-    if (surface_caps.currentExtent.width == 0xFFFFFFFF && surface_caps.currentExtent.height == 0xFFFFFFFF) {
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, "        cur_extent = ( ??? ,  ??? )");
-    } else {
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, "        cur_extent = ({:5}, {:5})", surface_caps.currentExtent.width, surface_caps.currentExtent.height);
-    }
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "        max_extent = ({:5}, {:5})", surface_caps.maxImageExtent.width, surface_caps.maxImageExtent.height);
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "    desired_extent = ({:5}, {:5})", desired_extent.width, desired_extent.height);
-#endif
-
     auto extent = VkExtent2D {
         .width = std::clamp(desired_extent.width, surface_caps.minImageExtent.width, surface_caps.maxImageExtent.width),
         .height = std::clamp(desired_extent.height, surface_caps.minImageExtent.height, surface_caps.maxImageExtent.height),
@@ -464,9 +424,6 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
     if (scaling_caps.supportedPresentScaling) {
         auto min = scaling_caps.minScaledImageExtent;
         auto max = scaling_caps.maxScaledImageExtent;
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, "      scaling_caps = ({}, {}) -- ({}, {})", min.width, min.height, max.width, max.height);
-#endif
 
         auto scaled_width = std::clamp(desired_extent.width, min.width, max.width);
         auto scaled_height = std::clamp(desired_extent.height, min.height, max.height);
@@ -474,25 +431,13 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
 
             if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT) {
                 scaling_mode = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT;
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-                VKWSI_LOG(ctx, vkwsi_log_level_trace, "      scaling_mode = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT");
-#endif
             } else if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT) {
                 scaling_mode = VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT;
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-                VKWSI_LOG(ctx, vkwsi_log_level_trace, "      scaling_mode = VK_PRESENT_SCALING_ASPECT_RATIO_STRETCH_BIT_EXT");
-#endif
             } else if (scaling_caps.supportedPresentScaling & VK_PRESENT_SCALING_STRETCH_BIT_EXT) {
                 scaling_mode = VK_PRESENT_SCALING_STRETCH_BIT_EXT;
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-                VKWSI_LOG(ctx, vkwsi_log_level_trace, "      scaling_mode = VK_PRESENT_SCALING_STRETCH_BIT_EXT");
-#endif
             } else if (scaling_caps.supportedPresentScaling) {
                 // Fallback to selecting the "first" available scaling mode if we don't recognize any
                 scaling_mode = VkPresentScalingFlagBitsEXT(1 << std::countr_zero(scaling_caps.supportedPresentScaling));
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-                VKWSI_LOG(ctx, vkwsi_log_level_trace, "      scaling_mode = {}", scaling_mode);
-#endif
             }
 
             if (scaling_mode) {
@@ -503,28 +448,12 @@ VkResult vkwsi_swapchain_recreate(vkwsi_swapchain* swapchain)
         VkPresentScalingFlagsEXT flags;
     }
 
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "      final_extent = ({:5}, {:5})", extent.width, extent.height);
-
-    if (surface_caps.maxImageCount) {
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, "  caps_image_count = ({}..{})", surface_caps.minImageCount, surface_caps.maxImageCount);
-    } else {
-        VKWSI_LOG(ctx, vkwsi_log_level_trace, "  caps_image_count = ({}..)", surface_caps.minImageCount);
-    }
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, "   min_image_count =  {}", info.min_image_count);
-#endif
-
     auto min_image_count = std::max(info.min_image_count, surface_caps.minImageCount);
     if (surface_caps.maxImageCount) min_image_count = std::min(min_image_count, surface_caps.maxImageCount);
-
-#if VKWSI_NOISY_SWAPCHAIN_CREATION
-    VKWSI_LOG(ctx, vkwsi_log_level_trace, " final_image_count =  {}", min_image_count);
-#endif
 
     if (!swapchain->out_of_date && extent == swapchain->last_extent) {
         // If we have not receieved an OUT_OF_DATE error, and the new properties match up exactly
         // to current ones then we can skip recreating the swapchain.
-        VKWSI_LOG(ctx, vkwsi_log_level_warn, "Swapchain caps checked - same as current and not marked OUT-OF-DATE");
         return VK_SUCCESS;
     }
 
