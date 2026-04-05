@@ -194,6 +194,8 @@ VkResult vkwsi_acquire(vkwsi_swapchain* swapchain, const vkwsi_acquire_info* inf
                 .format = swapchain->info.format,
                 .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
             }), ctx->alloc, &image->view));
+
+            image->current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         }
 
         *out_image = image;

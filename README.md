@@ -50,7 +50,8 @@ VkResult res = vkwsi_acquire(swapchain, &info, &image);
 
 ```c++
 VkSemaphoreSubmitInfoKHR image_ready = { ... };
-VkResult res = vkwsi_transfer(vkwsi, &image, 1, queue, &image_ready, 1);
+vkwsi_transfer_info transfer = { image, layout };
+VkResult res = vkwsi_transfer(vkwsi, &transfer, 1, queue, &image_ready, 1);
 ```
 
 #### Record
@@ -79,7 +80,8 @@ VkResult res = vkQueueSubmit2(queue, 1, &submit_info, nullptr);
 #### Present
 
 ```c++
-VkResult res = vkwsi_present(vkwsi, &image, 1, queue, &render_complete, 1);
+vkwsi_transfer_info transfer = { image, layout };
+VkResult res = vkwsi_present(vkwsi, &transfer, 1, queue, &render_complete, 1);
 ```
 
 ## Vulkan Extensions

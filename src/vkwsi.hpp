@@ -18,7 +18,6 @@
     DO(CreateSemaphore)             \
     DO(WaitSemaphores)              \
     DO(GetSemaphoreCounterValue)    \
-    DO(SignalSemaphore)             \
     DO(DestroySemaphore)            \
     /* Fences */                    \
     DO(CreateFence)                 \
@@ -36,6 +35,13 @@
     /* Queue operations */          \
     DO(QueuePresentKHR)             \
     DO(QueueSubmit2)                \
+    /* Command Buffers */           \
+    DO(CreateCommandPool)           \
+    DO(DestroyCommandPool)          \
+    DO(AllocateCommandBuffers)      \
+    DO(BeginCommandBuffer)          \
+    DO(EndCommandBuffer)            \
+    DO(CmdPipelineBarrier2)         \
 
 #define VKWSI_DECLARE_FUNCTION(      Func, ...) PFN_vk##Func Func;
 #define VKWSI_LOAD_INSTANCE_FUNCTION(Func, ...) functions->Func = (PFN_vk##Func)functions->GetInstanceProcAddr(instance, "vk"#Func);
@@ -69,6 +75,16 @@ struct vkwsi_context
     const VkAllocationCallbacks* alloc = {};
 };
 
+struct vkwsi_commands
+{
+    VkResult result;
+    VkCommandPool pool;
+    VkCommandBuffer buffer;
+};
+
+vkwsi_commands vkwsi_begin_commands( vkwsi_context*, vkwsi_queue);
+VkResult       vkwsi_submit_commands(vkwsi_context*, vkwsi_queue, vkwsi_commands, const VkSemaphoreSubmitInfo*, uint32_t signal_count);
+
 struct vkwsi_image
 {
     vkwsi_swapchain* swapchain;
@@ -80,6 +96,8 @@ struct vkwsi_image
     VkExtent2D extent;
 
     VkResult present_result;
+
+    VkImageLayout current_layout;
 };
 
 struct vkwsi_swapchain

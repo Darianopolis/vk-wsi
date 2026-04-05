@@ -11,8 +11,12 @@
 extern "C" {
 #endif
 
-typedef struct vkwsi_context_info
-{
+typedef struct {
+    VkQueue  handle;
+    uint32_t family;
+} vkwsi_queue;
+
+typedef struct {
     VkInstance instance;
     VkDevice device;
     VkPhysicalDevice physical_device;
@@ -39,8 +43,7 @@ VkExtent2D  vkwsi_image_get_extent(vkwsi_image*);
 VkImage     vkwsi_image_get_image( vkwsi_image*);
 VkImageView vkwsi_image_get_view(  vkwsi_image*);
 
-typedef struct vkwsi_acquire_info
-{
+typedef struct {
     VkFormat format;
     VkColorSpaceKHR color_space;
     uint32_t image_array_layers;
@@ -53,9 +56,18 @@ typedef struct vkwsi_acquire_info
 
 vkwsi_acquire_info vkwsi_acquire_info_default();
 
-VkResult vkwsi_acquire( vkwsi_swapchain*, const vkwsi_acquire_info*, vkwsi_image**);
-VkResult vkwsi_transfer(vkwsi_context*, vkwsi_image**, uint32_t image_count, VkQueue, const VkSemaphoreSubmitInfo* signals, uint32_t signal_count);
-VkResult vkwsi_present( vkwsi_context*, vkwsi_image**, uint32_t image_count, VkQueue, const VkSemaphoreSubmitInfo* waits,   uint32_t wait_count  );
+VkResult vkwsi_acquire(vkwsi_swapchain*, const vkwsi_acquire_info*, vkwsi_image**);
+
+typedef struct {
+    vkwsi_image*  image;
+    VkImageLayout layout;
+} vkwsi_transfer_info;
+
+VkResult vkwsi_transfer(vkwsi_context*, const vkwsi_transfer_info*, uint32_t image_count,
+                        vkwsi_queue, const VkSemaphoreSubmitInfo* signals, uint32_t signal_count);
+
+VkResult vkwsi_present(vkwsi_context*, const vkwsi_transfer_info*, uint32_t image_count,
+                       vkwsi_queue, const VkSemaphoreSubmitInfo* waits, uint32_t wait_count);
 
 #ifdef __cplusplus
 }

@@ -129,10 +129,10 @@ int main()
     std::vector<VkQueueFamilyProperties> queue_props;
     vkwsi_enumerate(queue_props, vkGetPhysicalDeviceQueueFamilyProperties, physical_device);
 
-    uint32_t queue_family = ~0u;
+    vkwsi_queue queue = {nullptr, ~0u};
     for (uint32_t i = 0; i < queue_props.size(); ++i) {
         if (queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            queue_family = i;
+            queue.family = i;
             break;
         }
     }
@@ -162,7 +162,7 @@ int main()
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = vkwsi_ptr_to(VkDeviceQueueCreateInfo {
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = queue_family,
+            .queueFamilyIndex = queue.family,
             .queueCount = 1,
             .pQueuePriorities = vkwsi_ptr_to(1.f),
         }),
@@ -176,7 +176,6 @@ int main()
     device_fn(vkCreateCommandPool);
     device_fn(vkAllocateCommandBuffers);
     device_fn(vkCreateSemaphore);
-    device_fn(vkCmdPipelineBarrier2);
     device_fn(vkBeginCommandBuffer);
     device_fn(vkCmdBeginRendering);
     device_fn(vkEndCommandBuffer);
@@ -189,8 +188,7 @@ int main()
 
     // Get graphics queue
 
-    VkQueue queue = {};
-    vkGetDeviceQueue(device, queue_family, 0, &queue);
+    vkGetDeviceQueue(device, queue.family, 0, &queue.handle);
 
     // Create timeline semaphore
 
@@ -223,7 +221,7 @@ int main()
     check(vkCreateCommandPool(device, vkwsi_ptr_to(VkCommandPoolCreateInfo {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
         .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = queue_family,
+        .queueFamilyIndex = queue.family,
     }), nullptr, &cmd_pool));
     VKWSI_DEFER { vkDestroyCommandPool(device, cmd_pool, nullptr); };
 
@@ -405,12 +403,14 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
-        std::vector<vkwsi_image*> images(windows.size());
+        std::vector<vkwsi_transfer_info> images(windows.size());
+
         // NOTE: We do not need to lock `windows_mutex` when iterating over windows if
         //       we do not invalidate iterators or attempt to read `close_requested`
         for (uint32_t i = 0; i < windows.size(); ++i) {
             windows[i]->info.extent = windows[i]->extent;
-            check(vkwsi_acquire(windows[i]->swapchain, &windows[i]->info, &images[i]));
+            check(vkwsi_acquire(windows[i]->swapchain, &windows[i]->info, &images[i].image));
+            images[i].layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         }
 
         check(vkwsi_transfer(vkwsi, images.data(), images.size(), queue, &image_ready, 1));
@@ -422,49 +422,10 @@ int main()
         })));
 
         for (uint32_t i = 0; i < windows.size(); ++i) {
-            auto& wd = windows[i];
-            auto* current = images[i];
-            auto image = vkwsi_image_get_image(current);
-            auto extent = vkwsi_image_get_extent(current);
-
-            auto transition = [&](VkCommandBuffer cmd, VkImage image,
-                VkPipelineStageFlags2 src, VkPipelineStageFlags2 dst,
-                VkAccessFlags2 src_access, VkAccessFlags2 dst_access,
-                VkImageLayout old_layout, VkImageLayout new_layout)
-            {
-                vkCmdPipelineBarrier2(cmd, vkwsi_ptr_to(VkDependencyInfo {
-                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                    .imageMemoryBarrierCount = 1,
-                    .pImageMemoryBarriers = vkwsi_ptr_to(VkImageMemoryBarrier2 {
-                        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                        .srcStageMask = src,
-                        .srcAccessMask = src_access,
-                        .dstStageMask = dst,
-                        .dstAccessMask = dst_access,
-                        .oldLayout = old_layout,
-                        .newLayout = new_layout,
-                        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = image,
-                        .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
-                    }),
-                }));
-            };
-
-            transition(cmd, image,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-                0, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-            vkCmdClearColorImage(cmd, image,
+            vkCmdClearColorImage(cmd, vkwsi_image_get_image(images[i].image),
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 vkwsi_ptr_to(get_clear_color()),
                 1, vkwsi_ptr_to(VkImageSubresourceRange { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 }));
-
-            transition(cmd, image,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR, VK_PIPELINE_STAGE_2_TRANSFER_BIT_KHR,
-                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
         }
 
         check(vkEndCommandBuffer(cmd));
@@ -478,7 +439,7 @@ int main()
             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
         };
 
-        check(vkQueueSubmit2(queue, 1, vkwsi_ptr_to(VkSubmitInfo2 {
+        check(vkQueueSubmit2(queue.handle, 1, vkwsi_ptr_to(VkSubmitInfo2 {
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
             .waitSemaphoreInfoCount = 1,
             .pWaitSemaphoreInfos = &image_ready,

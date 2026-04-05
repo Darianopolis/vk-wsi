@@ -61,3 +61,59 @@ void vkwsi_swapchain_destroy(vkwsi_swapchain* swapchain)
 
     delete swapchain;
 }
+
+vkwsi_commands vkwsi_begin_commands(vkwsi_context* ctx, vkwsi_queue queue)
+{
+    VkCommandPool pool;
+    auto res = ctx->vk.CreateCommandPool(ctx->device, vkwsi_ptr_to(VkCommandPoolCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .queueFamilyIndex = queue.family,
+    }), ctx->alloc, &pool);
+    if (res != VK_SUCCESS) return {res};
+
+    VKWSI_DEFER { ctx->vk.DestroyCommandPool(ctx->device, pool, ctx->alloc); };
+
+    VkCommandBuffer buffer;
+    res = ctx->vk.AllocateCommandBuffers(ctx->device, vkwsi_ptr_to(VkCommandBufferAllocateInfo {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    }), &buffer);
+    if (res != VK_SUCCESS) return {res};
+
+    res = ctx->vk.BeginCommandBuffer(buffer, vkwsi_ptr_to(VkCommandBufferBeginInfo {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+    }));
+    if (res != VK_SUCCESS) return {res};
+
+    return {VK_SUCCESS, std::exchange(pool, nullptr), buffer};
+}
+
+VkResult vkwsi_submit_commands(vkwsi_context* ctx, vkwsi_queue queue, vkwsi_commands commands, const VkSemaphoreSubmitInfo* signals, uint32_t signal_count)
+{
+    VKWSI_DEFER { ctx->vk.DestroyCommandPool(ctx->device, commands.pool, ctx->alloc); };
+
+    VkFence fence = nullptr;
+    VKWSI_CHECK(ctx->vk.CreateFence(ctx->device, vkwsi_ptr_to(VkFenceCreateInfo {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+    }), ctx->alloc, &fence));
+    VKWSI_DEFER { ctx->vk.DestroyFence(ctx->device, fence, ctx->alloc); };
+
+    VKWSI_CHECK(ctx->vk.EndCommandBuffer(commands.buffer));
+
+    VKWSI_CHECK(ctx->vk.QueueSubmit2(queue.handle, 1, vkwsi_ptr_to(VkSubmitInfo2 {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+        .commandBufferInfoCount = 1,
+        .pCommandBufferInfos = vkwsi_ptr_to(VkCommandBufferSubmitInfo {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+            .commandBuffer = commands.buffer,
+        }),
+        .signalSemaphoreInfoCount = signal_count,
+        .pSignalSemaphoreInfos = signals,
+    }), fence));
+
+    VKWSI_CHECK(ctx->vk.WaitForFences(ctx->device, 1, &fence, true, UINT64_MAX));
+
+    return VK_SUCCESS;
+}
